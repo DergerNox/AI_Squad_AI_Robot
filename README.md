@@ -97,6 +97,59 @@ A GitHubon a „Compare & pull request” gombbal kérhetitek, hogy a módosít�
 bekerüljön a `main` ágba. Jelszó helyett GitHub tokent kér
 (GitHub → Settings → Developer settings → Personal access tokens).
 
+## 6. Az MI-ágens futtatása a Pi-n
+
+Egyszeri telepítés (sok csomagot tölt le, eltarthat egy ideig):
+
+```bash
+sudo apt install ros-jazzy-rai-interfaces
+python3 -m venv ~/rai_venv --system-site-packages
+source ~/rai_venv/bin/activate
+pip install rai-core
+```
+
+Beállítás: hozd létre a `.env` fájlt a mintából, és írd bele, hol fut a modell:
+
+```bash
+cd ~/picar_ws/src/picar/picar_agent
+cp .env.example .env
+nano .env
+```
+
+- Ha a modell a PC-n fut (Ollama): `PICAR_BASE_URL=http://<a PC IP-címe>:11434`
+- Ha a felhőben fut: `PICAR_LLM`, `PICAR_MODEL` és a kulcs
+
+Indítás. A Pi-n ne a `run.sh`-t használd, mert az a Gazebót is elindítja:
+
+```bash
+source ~/rai_venv/bin/activate
+cd ~/picar_ws/src/picar/picar_agent
+python3 agent.py
+```
+
+Az ágens csak akkor tud vezetni, ha az autó oldala is fut: a `picar_base`
+hardveres része, a kamera és az ultrahangos szenzor node-ja. Ezek még nincsenek kész.
+
+## 7. Ollama a PC-n (ha a modell a PC-n fut)
+
+A PC és a Pi legyen ugyanazon a hálózaton.
+
+1. Telepítsd az Ollamát Windowsra: https://ollama.com/download/windows
+2. Töltsd le a modellt (PowerShellben): `ollama pull qwen3-vl:4b-instruct`
+3. Engedd, hogy a hálózatról is elérhető legyen: lépj ki az Ollamából a tálcán,
+   keresd meg a Start menüben a „környezeti változók” beállítást, add hozzá a
+   fiókodhoz: `OLLAMA_HOST` = `0.0.0.0:11434`, majd indítsd újra az Ollamát a Start menüből.
+4. Engedélyezd a 11434-es portot a tűzfalon (PowerShell rendszergazdaként):
+   ```powershell
+   New-NetFirewallRule -DisplayName "Ollama" -Direction Inbound -Protocol TCP -LocalPort 11434 -Action Allow
+   ```
+5. A PC IP-címe: `ipconfig`, az aktív hálózati kártya „IPv4 Address” sora.
+6. Próba a Pi-ről:
+   ```bash
+   curl http://<a PC IP-címe>:11434/api/tags
+   ```
+   Ha a válaszban szerepel a `qwen3-vl:4b-instruct`, a Pi eléri a modellt.
+
 ## Ami még nem használható a Pi-n
 
 - `picar_base`: most csak a Gazebo-beli digitális ikert vezérli; a valódi autó hardveres része még nincs megírva
