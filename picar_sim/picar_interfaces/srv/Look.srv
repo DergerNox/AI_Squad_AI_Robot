@@ -1,0 +1,5 @@
+float32 pan_deg        # left positive
+float32 tilt_deg       # up positive
+---
+bool success
+string message

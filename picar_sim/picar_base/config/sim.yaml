@@ -1,0 +1,14 @@
+# picar_base settings for the Gazebo twin. Safety values match the real car's picar_hw.yaml.
+picar_base:
+  ros__parameters:
+    backend: sim
+    wheelbase_m: 0.145        # same as wheel_base in picar.urdf.xacro
+    full_speed_mps: 0.5       # twin speed at full motor power (the connector maps 0.5 m/s the same way)
+    max_steering_deg: 30.0
+    max_speed: 0.4            # fraction of full motor power
+    max_move_s: 3.0
+    cmd_timeout_s: 0.5
+    obstacle_stop_m: 0.25
+    range_timeout_s: 0.3
+    max_pan_deg: 90.0
+    max_tilt_deg: 40.0

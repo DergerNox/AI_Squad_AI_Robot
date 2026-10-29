@@ -1,0 +1,7 @@
+# Keys, and files the agent makes while it runs
+.env
+memory.json
+artifact_database.pkl
+sim.log
+__pycache__/
+*.pyc

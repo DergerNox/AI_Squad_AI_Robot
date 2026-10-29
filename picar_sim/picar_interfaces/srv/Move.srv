@@ -1,0 +1,7 @@
+float32 speed          # -1.0..1.0 as a fraction of max_speed; negative reverses
+float32 steering_deg   # left positive; clamped to max_steering_deg
+float32 duration_s     # clamped to max_move_s
+---
+bool completed         # false when a safety rule ended the move early
+string reason          # done, obstacle, no_range, estop or busy
+float32 min_range_m    # closest ultrasonic reading during the move
