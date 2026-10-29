@@ -1,0 +1,46 @@
+1. Terminál – Mozgásvezérlő és Odometria (Bridge)
+Ez a folyamat kezeli a jármű kinematikáját, az ultrahangos érzékelést és számolja a pozíciót.
+    cd ~/picar_gazebo_ws
+    source /opt/ros/humble/setup.bash
+    source install/setup.bash
+    ros2 run minirobot_bringup picar_bridge
+
+2. Terminál – Intelligens Döntéshozó (Gemini Agent)
+Ez a folyamat fordítja le a természetes nyelvű mondatokat robotparancsokra, kezeli az akadályvédelmet és a visszajelzéseket.
+    cd ~/picar_gazebo_ws
+    source /opt/ros/humble/setup.bash
+    source install/setup.bash
+
+//A https://aistudio.google.com/api-keys oldalon lehet ingyenes kulcsot generáltatni!
+    export GEMINI_API_KEY="ide_a_kulcsodat"
+    python3 agent.py
+
+3. Terminál – Irányítás és Felügyelet
+Innen küldhetsz be utasításokat, és itt ellenőrizheted a robot belső állapotait.
+    source /opt/ros/humble/setup.bash
+
+Példa utasítások beküldése (/from_human témakör)
+Előremenet:
+    ros2 topic pub --once /from_human std_msgs/msg/String "{data: 'Menj elore egy kicsit'}"
+
+Kanyarodás balra:
+    ros2 topic pub --once /from_human std_msgs/msg/String "{data: 'Fordulj balra'}"
+
+Kanyarodás jobbra:
+    ros2 topic pub --once /from_human std_msgs/msg/String "{data: 'Kanyarodj jobbra'}"
+
+Hátramenet:
+    ros2 topic pub --once /from_human std_msgs/msg/String "{data: 'Tolass hatra'}"
+
+Megállás:
+    ros2 topic pub --once /from_human std_msgs/msg/String "{data: 'Allj meg most'}"
+
+Szenzorok és állapotok figyelése (Opcionális ellenőrzések)
+Robot szöveges válaszának olvasása:
+    ros2 topic echo /to_human
+
+Ultrahangos távolságadatok lekérdezése:
+    ros2 topic echo /ultrasonic_distance
+
+Odometria (pozíció és sebesség) ellenőrzése:
+    ros2 topic echo --once /odom

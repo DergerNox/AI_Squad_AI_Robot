@@ -1,0 +1,8 @@
+A https://aistudio.google.com/api-keys oldalon lehet ingyenes kulcsot generáltatni!
+Ha megvan a kulcs akkor:
+    cd ~/picar_gazebo_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+# API kulcs beállítása:
+export GEMINI_API_KEY="ide_a_kulcsodat"
