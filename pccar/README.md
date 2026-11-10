@@ -1,61 +1,64 @@
-# PC car (planned)
+# PC-s autó (tervezett)
 
-A second car next to the PiCar-B, not a replacement. Nothing is built yet: this folder
-holds the plan. It uses the same agent, interfaces and safety rules as the PiCar-B
-(`shared/`), with other hardware.
+Egy második autó a PiCar-B mellé (nem helyette). Még semmi sincs megépítve: ez a mappa a
+tervet tartalmazza. Ugyanazt az MI-t, ugyanazokat a ROS-neveket és biztonsági szabályokat
+használja, mint a PiCar-B (`shared/`), csak más hardverrel.
 
-## Hardware (given, can't be changed)
+## A hardver (adott, nem változtatható)
 
-| Part | Job |
+| Alkatrész | Feladata |
 |---|---|
-| Panasonic Toughbook CF-20 mk2 (i5/m5-7Y57, 8 GB RAM, Intel graphics) | Lubuntu 24.04, ROS 2 Jazzy, the agent |
-| ESP32-S3, programmed with the Arduino IDE | motors, servos, 3 ultrasonic sensors |
-| 16-channel servo controller | written down as "16/4"; the meaning is unclear |
-| Samsung Galaxy A12 on USB | the camera |
+| Panasonic Toughbook CF-20 mk2 (i5/m5-7Y57, 8 GB RAM, Intel grafika) | Lubuntu 24.04, ROS 2 Jazzy, az MI |
+| ESP32-S3, Arduino IDE-vel programozva | a motorok, a szervók és a 3 ultrahangos távolságérzékelő |
+| 16 csatornás szervóvezérlő | „16/4”-ként van feljegyezve; nem tudjuk, mit jelent |
+| Samsung Galaxy A12 USB-n | a kamera |
 
-## How it fits together (agreed in principle)
+## Hogyan áll össze (elvben megbeszélve)
 
-| Node | Job | On the PiCar-B |
+| Node | Feladata | A PiCar-B-n |
 |---|---|---|
-| `camera` (`v4l2_camera`) | DroidCam over USB → `/dev/videoN` → `/camera/image_raw`, 640×480 | `camera_ros` |
-| `esp32_bridge` | owns the serial port: publishes the ranges, passes picar_base's motor and servo commands to the ESP32 | `sim_bridge` has this role in the twin |
-| `picar_base`, `esp32` backend | SafetyGate, motors, steering | `hw` backend |
-| agent, `command_listener` | the same | the same |
+| `camera` (`v4l2_camera`) | DroidCam USB-n → `/dev/videoN` → `/camera/image_raw`, 640×480 | `camera_ros` |
+| `esp32_bridge` | egyedül ő használja a soros portot: közzéteszi a távolságokat, és továbbítja a `picar_base` motor- és szervóparancsait az ESP32-nek | a digitális ikerben a `sim_bridge` csinálja ezt |
+| `picar_base`, `esp32` backend | biztonsági szűrő (SafetyGate), motorok, kormány | `hw` backend |
+| MI, `command_listener` | ugyanaz | ugyanaz |
 
-- **Lubuntu 24.04, not 26.04.** ROS 2 Jazzy is Tier 1 only on 24.04 (26.04 goes with
-  Lyrical), and everything else is on Jazzy and Gazebo Harmonic.
-- **Camera.** The A12's last update is Android 12, and Android's own USB webcam mode
-  needs Android 14 QPR1. So: DroidCam over USB (adb + v4l2loopback).
-- **ESP32 link.** A plain text protocol over USB serial, no micro-ROS: the precompiled
-  micro_ros_arduino for Jazzy is a problem in the Arduino IDE.
-- **Safety on the ESP32.** The firmware stops the motors by itself when no command has
-  arrived for 0.5 s.
-- **Sensors.** `/ultrasonic/range` is the centre sensor, the same topic as on the PiCar-B,
-  plus `/ultrasonic/left` and `/ultrasonic/right`. The SafetyGate uses whichever sensors
-  a car has.
-- **Car numbers.** Speed, size, steering and camera FOV move from `picar_tools.py` to a
-  per-car config, and picar_base loads its backend by module name (`esp32` in
-  `pccar/pccar_car`).
+- **Lubuntu 24.04, nem 26.04.** A ROS 2 Jazzy csak a 24.04-en támogatott teljesen
+  (Tier 1); a 26.04-hez a Lyrical tartozik, minden más pedig Jazzyn és Gazebo Harmonicon fut.
+- **Kamera.** Az A12 utolsó frissítése az Android 12, az Android saját USB-s webkamera
+  módjához viszont Android 14 QPR1 kell. Ezért: DroidCam USB-n (adb + v4l2loopback).
+- **ESP32-kapcsolat.** Egyszerű szöveges üzenetek USB-s soros vonalon, micro-ROS nélkül:
+  a Jazzyhoz előre lefordított micro_ros_arduino nehezen használható az Arduino IDE-ben.
+- **Biztonság az ESP32-n.** A firmware magától leállítja a motorokat, ha 0,5 másodpercig
+  nem jön parancs.
+- **Érzékelők.** A `/ultrasonic/range` a középső érzékelő (ugyanaz a topik, mint a
+  PiCar-B-n), mellette `/ultrasonic/left` és `/ultrasonic/right`. A SafetyGate azokat az
+  érzékelőket használja, amelyek az adott autón vannak.
+- **Az autó adatai.** A sebesség, a méretek, a kormányzás és a kamera látószöge a
+  `picar_tools.py`-ból autónkénti beállításfájlba kerül, a `picar_base` pedig modulnév
+  alapján tölti be a backendjét (az `esp32` backend a `pccar/pccar_car` csomagban lesz).
 
-## Notes for building it
+## Az építéshez
 
-- The HC-SR04's echo pin gives 5 V and the ESP32 takes 3.3 V: put a voltage divider on
-  each echo line.
-- Fire the 3 sensors about 60 ms apart, so one does not hear another's echo.
-- Motors and servos on their own battery, with a common ground with the ESP32.
+- A HC-SR04 echo lába 5 V-ot ad, az ESP32 viszont csak 3,3 V-ot bír: minden echo
+  vezetékre tegyetek feszültségosztót.
+- A 3 érzékelő mérését kb. 60 ms-os eltolással indítsátok, hogy egyik se hallja a
+  másik visszhangját.
+- A motorok és a szervók saját akkumulátorról menjenek, de a földjük (GND) legyen közös
+  az ESP32-ével.
 
-## Planned packages
+## Tervezett csomagok
 
-| Package | What |
+| Csomag | Mi lesz benne |
 |---|---|
-| `pccar_description` | the Gazebo model (needs the sizes below) |
-| `pccar_gazebo` | its bridge settings, so `sim` can load it (`cars.yaml` already has a `pccar` entry waiting for these two) |
-| `pccar_car` | `esp32_bridge` and picar_base's `esp32` backend |
-| `esp32_firmware` | the Arduino sketch and the serial protocol |
+| `pccar_description` | a Gazebo-modell (ehhez kellenek a lenti méretek) |
+| `pccar_gazebo` | a bridge-beállításai, hogy a `sim` be tudja tölteni (a `cars.yaml`-ban már van rá váró `pccar` bejegyzés) |
+| `pccar_car` | az `esp32_bridge` és a `picar_base` `esp32` backendje |
+| `esp32_firmware` | az Arduino-program és a soros üzenetek leírása |
 
-## Open questions
+## Nyitott kérdések
 
-- Drive: an Ackermann steering servo, or tank-style?
-- What does the servo controller drive, and what does "16/4" mean?
-- Where do the 3 sensors point?
-- Sizes: wheel diameter, track width, body, camera height.
+- Kormányzás: szervóval kormányzott első kerekek (Ackermann), vagy tankszerű (a két
+  oldal kerekei külön hajtva)?
+- Mit hajt a szervóvezérlő, és mit jelent a „16/4”?
+- Merre néz a 3 érzékelő?
+- Méretek: kerékátmérő, nyomtáv, karosszéria, a kamera magassága.

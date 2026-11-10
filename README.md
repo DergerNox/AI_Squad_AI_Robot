@@ -40,7 +40,7 @@ rm -rf build install log
 mkdir -p ~/picar_ws/src
 cd ~/picar_ws/src
 git clone https://github.com/DergerNox/AI_Squad_AI_Robot.git picar
-sudo apt install python3-gpiozero python3-lgpio ros-jazzy-camera-ros
+sudo apt install python3-gpiozero python3-lgpio python3-pytest ros-jazzy-camera-ros
 cd ~/picar_ws
 source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install --packages-select picar_interfaces picar_base picar_listener picar_car
@@ -79,6 +79,14 @@ az autónak. Minden parancsot külön terminálban futtass (például több SSH-
 Billentyűzetes vezetéshez telepítsd: `sudo apt install ros-jazzy-teleop-twist-keyboard`,
 majd: `ros2 run teleop_twist_keyboard teleop_twist_keyboard`
 
+Az autó adatait (tengelytáv, legnagyobb kormányszög, időkorlát) a node ROS-paraméterként
+kapja, az alapértékek a digitális iker értékei. Ha a valódi autón mást mértek, indításkor
+megadhatók, például:
+
+```bash
+ros2 run picar_listener command_listener --ros-args -p wheelbase_m:=0.15
+```
+
 ## 3. Az autó node-jainak indítása
 
 Az autón külön node a kamera (`camera`), a távolságérzékelő (`ultrasonic`) és a
@@ -114,7 +122,22 @@ Raspberry Pi kamerát. Ilyenkor a camera_ros leírása szerint a Raspberry Pi-s 
 kell lefordítani: https://github.com/christianrauch/camera_ros
 
 A beállítások (a kamera képmérete, az érzékelő lábai, a sebesség- és biztonsági
-értékek) a `picar_car/config/car.yaml` fájlban vannak.
+értékek) a `~/picar_ws/src/picar/picar/picar_car/config/car.yaml` fájlban vannak.
+
+### A távolságérzékelő node próbája érzékelő nélkül
+
+Ez a próba szimulált GPIO-lábakkal futtatja a node-ot, így bekötés nélkül is megmutatja,
+hogy a node jól számol: 10 cm és 3,9 m közötti távolságokat, a 4 m-nél messzebbit és a
+hiányzó visszhangot. A valódi lábakhoz nem nyúl, ezért bekötött érzékelővel is futtatható.
+Körülbelül 10 másodpercig tart:
+
+```bash
+cd ~/picar_ws/src/picar/picar/picar_car
+python3 -m pytest test
+```
+
+Ha minden rendben van, a végén ez áll: `8 passed`. Ha `skipped` áll ott, a
+`python3-gpiozero` nincs telepítve; ha a `pytest` hiányzik: `sudo apt install python3-pytest`.
 
 ## 4. Mi fut éppen?
 
@@ -132,6 +155,9 @@ git pull
 cd ~/picar_ws
 colcon build --symlink-install --packages-select picar_interfaces picar_base picar_listener picar_car
 ```
+
+Az új mappaszerkezet utáni első frissítésnél a fordítás előtt egyszer töröld a régi
+fordítást (lásd „A repó mappái”).
 
 ## 6. A saját módosításaitok feltöltése
 
@@ -214,4 +240,5 @@ A PC és a Pi legyen ugyanazon a hálózaton.
 
 - `picar_base`: most csak a Gazebo-beli digitális ikert vezérli; a valódi autó hardveres része (motorok, kormány, kameratartó) még nincs megírva
 - `picar_gazebo`, `picar_description`: a digitális iker, csak a PC-n fut
+- `squad_gazebo` (a `sim` parancs): a digitális ikert és az MI-t indítja, csak a PC-n fut
 - `picar_agent`: az MI, egyelőre a PC-n fut
