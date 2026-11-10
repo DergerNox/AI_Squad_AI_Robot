@@ -10,7 +10,7 @@ the real car through the same ROS 2 names.
 | File | What it does |
 |---|---|
 | `agent.py` | The AI connection and the loop: model, conversation, your input and its answers |
-| `picar_tools.py` | The car side: the tools (drive, turn, look, look_around, reached, remember), the prompt, the sensor readings |
+| `picar_tools.py` | The car side: the tools (drive, turn, look, look_around, approach, reached, remember) and the prompt |
 | `run.sh` | Starts the Gazebo twin in the background and the agent in the terminal |
 | `.env.example` | The settings: which AI to use, and its key. Copy it to `.env` |
 
@@ -68,9 +68,12 @@ Every step is one round of this loop:
 1. The AI gives an order: a tool call such as `drive(distance_m=0.6)`.
 2. The tool sends it to the car: `/picar/move` or `/picar/look`.
 3. The tool reads the car: the camera picture (`/camera/image_raw`), the distance
-   sensor (`/ultrasonic/range`) and the result of the move.
-4. The AI gets the picture with a text: what happened, the sensor readings, and
-   which targets it has reached.
+   sensor (`/ultrasonic/range`, in approach) and the result of the move.
+4. The AI gets the picture with a text: what happened, and which targets it has
+   reached.
+
+The camera, the distance sensor and `picar_base` are separate nodes, the same in the
+twin and on the real car, so the agent works with both unchanged.
 
 `picar_base` checks every move with its safety rules (stop at 0.25 m, at most 3 s
 per move, speed limit), so the AI cannot drive the car into a wall.
@@ -81,4 +84,4 @@ per move, speed limit), so the AI cannot drive the car into a wall.
 - What the AI knows about the car, and the car's numbers: `PICAR_PROMPT` and the
   constants at the top of `picar_tools.py` (measured in the twin; measure them
   again on the real car)
-- Another sensor for the AI: `read_sensors()` in `picar_tools.py`
+- Another sensor for the AI: read its topic in `picar_tools.py`, like `range_ahead()` does

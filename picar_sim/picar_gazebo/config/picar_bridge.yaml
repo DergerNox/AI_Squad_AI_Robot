@@ -1,4 +1,8 @@
-# ros_gz_bridge topics for the PiCar-B twin.
+# ros_gz_bridge topics for the twin's simulated car hardware (node sim_bridge):
+# the motors, the servos, the wheel odometry and the clock. picar_base drives these
+# in the twin; on the real car it drives the hardware directly instead.
+# The camera and the distance sensor have their own bridge nodes, like on the real
+# car: see camera_bridge.yaml and ultrasonic_bridge.yaml.
 # Gazebo-side names match the <topic> settings in picar.urdf.xacro.
 
 # Simulation time
@@ -27,26 +31,6 @@
   ros_type_name: "std_msgs/msg/Float64"
   gz_type_name: "gz.msgs.Double"
   direction: ROS_TO_GZ
-
-# Camera
-- ros_topic_name: "/camera/image_raw"
-  gz_topic_name: "/camera/image_raw"
-  ros_type_name: "sensor_msgs/msg/Image"
-  gz_type_name: "gz.msgs.Image"
-  direction: GZ_TO_ROS
-
-- ros_topic_name: "/camera/camera_info"
-  gz_topic_name: "/camera/camera_info"
-  ros_type_name: "sensor_msgs/msg/CameraInfo"
-  gz_type_name: "gz.msgs.CameraInfo"
-  direction: GZ_TO_ROS
-
-# Ultrasonic: the bridge converts the lidar fan to a Range with the shortest ray
-- ros_topic_name: "/ultrasonic/range"
-  gz_topic_name: "/ultrasonic/range"
-  ros_type_name: "sensor_msgs/msg/Range"
-  gz_type_name: "gz.msgs.LaserScan"
-  direction: GZ_TO_ROS
 
 # Joint angles (wheels, steering, head) for robot_state_publisher
 - ros_topic_name: "/joint_states"

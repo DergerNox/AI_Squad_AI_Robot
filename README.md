@@ -18,9 +18,10 @@ ROS 2 Jazzy (`ros-jazzy-ros-base` és `ros-dev-tools`) van telepítve.
 mkdir -p ~/picar_ws/src
 cd ~/picar_ws/src
 git clone https://github.com/DergerNox/AI_Squad_AI_Robot.git picar
+sudo apt install python3-gpiozero python3-lgpio ros-jazzy-camera-ros
 cd ~/picar_ws
 source /opt/ros/jazzy/setup.bash
-colcon build --symlink-install --packages-select picar_interfaces picar_base picar_listener
+colcon build --symlink-install --packages-select picar_interfaces picar_base picar_listener picar_car
 ```
 
 Ezután, hogy minden új terminál ismerje a ROS-t és a mi csomagjainkat:
@@ -56,7 +57,44 @@ az autónak. Minden parancsot külön terminálban futtass (például több SSH-
 Billentyűzetes vezetéshez telepítsd: `sudo apt install ros-jazzy-teleop-twist-keyboard`,
 majd: `ros2 run teleop_twist_keyboard teleop_twist_keyboard`
 
-## 3. Mi fut éppen?
+## 3. Az autó node-jainak indítása
+
+Az autón külön node a kamera (`camera`), a távolságérzékelő (`ultrasonic`) és a
+`picar_base` (motorok, kormány, kameratartó, biztonsági megállás). Egy paranccsal indulnak:
+
+```bash
+ros2 launch picar_car car.launch.py                              # mindhárom
+ros2 launch picar_car car.launch.py camera:=false base:=false    # csak a távolságérzékelő
+```
+
+A `picar_base` hardveres része még nincs megírva, addig `base:=false`-szal indítsd.
+Amíg a `camera_ros` nincs telepítve, add hozzá a `camera:=false`-t is, különben az
+indítás a „package 'camera_ros' not found” hibával leáll.
+
+Ellenőrzés egy másik terminálban:
+
+```bash
+ros2 topic echo /ultrasonic/range --field range   # méter; .inf: 4 m-en belül nincs semmi, .nan: nem jött visszhang
+ros2 topic hz /camera/image_raw                    # kb. 10 kép másodpercenként
+```
+
+Ha a távolságérzékelő azt írja, hogy a lábai foglaltak (busy): az Ubuntu bekapcsolja az
+SPI-t, ami ugyanezeket a lábakat (GPIO 8 és 11) használja. A `/boot/firmware/config.txt`
+fájlban írd át a `dtparam=spi=on` sort `dtparam=spi=off`-ra, mentsd, és indítsd újra a Pi-t:
+
+```bash
+sudo nano /boot/firmware/config.txt
+sudo reboot
+```
+
+Ha a kamera nem indul: a ROS-csomag kamerakönyvtára (libcamera) nem ismer minden
+Raspberry Pi kamerát. Ilyenkor a camera_ros leírása szerint a Raspberry Pi-s libcamera-t
+kell lefordítani: https://github.com/christianrauch/camera_ros
+
+A beállítások (a kamera képmérete, az érzékelő lábai, a sebesség- és biztonsági
+értékek) a `picar_car/config/car.yaml` fájlban vannak.
+
+## 4. Mi fut éppen?
 
 ```bash
 ros2 node list       # a futó programok
@@ -64,16 +102,16 @@ ros2 topic list      # a topikok
 ros2 service list    # a szolgáltatások
 ```
 
-## 4. Frissítés a GitHubról
+## 5. Frissítés a GitHubról
 
 ```bash
 cd ~/picar_ws/src/picar
 git pull
 cd ~/picar_ws
-colcon build --symlink-install --packages-select picar_interfaces picar_base picar_listener
+colcon build --symlink-install --packages-select picar_interfaces picar_base picar_listener picar_car
 ```
 
-## 5. A saját módosításaitok feltöltése
+## 6. A saját módosításaitok feltöltése
 
 Első alkalommal:
 
@@ -97,7 +135,7 @@ A GitHubon a „Compare & pull request” gombbal kérhetitek, hogy a módosít�
 bekerüljön a `main` ágba. Jelszó helyett GitHub tokent kér
 (GitHub → Settings → Developer settings → Personal access tokens).
 
-## 6. Az MI-ágens futtatása a Pi-n
+## 7. Az MI-ágens futtatása a Pi-n
 
 Egyszeri telepítés (sok csomagot tölt le, eltarthat egy ideig):
 
@@ -127,10 +165,10 @@ cd ~/picar_ws/src/picar/picar_agent
 python3 agent.py
 ```
 
-Az ágens csak akkor tud vezetni, ha az autó oldala is fut: a `picar_base`
-hardveres része, a kamera és az ultrahangos szenzor node-ja. Ezek még nincsenek kész.
+Az ágens csak akkor tud vezetni, ha az autó node-jai is futnak (3. pont). A `picar_base`
+hardveres része még nincs kész.
 
-## 7. Ollama a PC-n (ha a modell a PC-n fut)
+## 8. Ollama a PC-n (ha a modell a PC-n fut)
 
 A PC és a Pi legyen ugyanazon a hálózaton.
 
@@ -152,6 +190,6 @@ A PC és a Pi legyen ugyanazon a hálózaton.
 
 ## Ami még nem használható a Pi-n
 
-- `picar_base`: most csak a Gazebo-beli digitális ikert vezérli; a valódi autó hardveres része még nincs megírva
+- `picar_base`: most csak a Gazebo-beli digitális ikert vezérli; a valódi autó hardveres része (motorok, kormány, kameratartó) még nincs megírva
 - `picar_gazebo`, `picar_description`: a digitális iker, csak a PC-n fut
 - `picar_agent`: az MI, egyelőre a PC-n fut

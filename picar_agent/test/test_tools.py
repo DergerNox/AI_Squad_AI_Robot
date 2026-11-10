@@ -1,12 +1,14 @@
-"""The agent's tools (drive, turn, look, look_around, reached, remember) against a fake car.
+"""The agent's tools (drive, turn, look, look_around, approach, reached, remember) against a fake car.
 
-FakeCar answers like picar_base and records every request, FakeVision gives scripted
-answers to the tools' picture questions, and FakeTime makes the waits instant.
+FakeCar answers like picar_base and the camera and distance sensor nodes, and records
+every request. FakeVision gives scripted answers to the tools' picture questions, and
+FakeTime makes the waits instant.
 """
 
 import base64
 import io
 import json
+import math
 from types import SimpleNamespace
 
 import numpy as np
@@ -28,6 +30,9 @@ class FakeTime:
     def monotonic(self):
         return self.now
 
+    def time(self):
+        return self.now
+
     def sleep(self, seconds):
         self.slept.append(seconds)
         self.now += seconds
@@ -35,13 +40,19 @@ class FakeTime:
 
 class FakeCar:
     """Stands in for the ROS2Connector: records what the tools send to picar_base
-    and answers like picar_base would.
+    and answers like picar_base, the camera and the distance sensor would.
 
     results: what the next /picar/move calls return, one entry per call:
         (reason, part, min_range_m)  the move ends with this reason after driving
                                      this part (0 to 1) of the asked time
         None                         picar_base does not answer
     Once the list is empty, every move drives the whole way ("done").
+
+    frames: how many more new camera pictures arrive (None: the camera keeps sending).
+    After the last one, RAI hands out the last picture again, as it does when the
+    camera node stops.
+
+    range_m: what the distance sensor reads.
     """
 
     def __init__(self, clock):
@@ -51,10 +62,20 @@ class FakeCar:
         self.results = []
         self.calls = []     # "look" and "move", in the order they came
         self.image = SimpleNamespace(height=2, width=2, encoding="rgb8", data=bytes(12))
+        self.frames = None
+        self.last_frame = 0.0
+        self.range_m = math.inf
 
     def receive_message(self, topic, **kwargs):
+        if topic == "/ultrasonic/range":
+            return ROS2Message(payload=SimpleNamespace(range=self.range_m, max_range=4.0))
         assert topic == "/camera/image_raw"
-        return ROS2Message(payload=self.image)
+        if self.frames is None or self.frames > 0:
+            self.clock.now += 0.1   # the next picture arrives (10 a second)
+            self.last_frame = self.clock.now
+            if self.frames is not None:
+                self.frames -= 1
+        return ROS2Message(payload=self.image, timestamp=self.last_frame)
 
     def service_call(self, message, target, msg_type, **kwargs):
         request = message.payload
@@ -131,6 +152,13 @@ def pixel(picture):
     return tuple(int(v) for v in np.array(Image.open(io.BytesIO(png)).convert("RGB"))[0, 0])
 
 
+def stop_in_front(tools, car, vision, seen="yes, red box"):
+    """Drive into something: the safety stop holds the car and the camera check says `seen`."""
+    car.results = [("obstacle", 0.0, 0.2)]
+    vision.answers = [seen]
+    use(tools.drive, distance_m=0.3)
+
+
 # ---------- drive ----------
 
 def test_drive_asks_picar_base_for_full_speed_for_the_right_time(tools, car):
@@ -201,12 +229,31 @@ def test_no_answer_from_picar_base(tools, car):
     assert "picar_base did not answer." in text
 
 
+# ---------- never blind ----------
+
+def test_drive_and_turn_do_not_move_without_new_pictures(tools, car):
+    car.frames = 0   # the camera has stopped: only its last picture is left
+    with pytest.raises(picar_tools.CameraDown, match="The car did not move. The camera has sent"):
+        use(tools.drive, distance_m=0.5)
+    with pytest.raises(picar_tools.CameraDown, match="The car did not move."):
+        use(tools.turn, angle_deg=30)
+    assert car.moves == []
+
+
+def test_a_camera_that_stops_during_a_move_is_reported_with_the_move(tools, car):
+    car.frames = 1   # one picture for the check before the move, none after it
+    result = use(tools.drive, distance_m=0.5)
+    assert car.moves == [move(1.0, 0.0, 2.5)]
+    assert result.content.startswith("Drove +0.50 m")
+    assert "the camera is not working" in result.content and result.artifact is None
+
+
 # ---------- turn ----------
 
-def test_turn_drives_at_full_steering_for_the_angle(tools, car):
-    text = use(tools.turn, angle_deg=90).content
-    assert car.moves == [move(1.0, 30.0, 2.25)]   # 90 deg at 200 deg/m = 0.45 m
-    assert "the heading changed about +90 degrees" in text
+def test_a_small_turn_drives_forward_at_full_steering(tools, car):
+    text = use(tools.turn, angle_deg=50).content
+    assert car.moves == [move(1.0, 30.0, 1.25)]   # 50 deg at 200 deg/m = 0.25 m
+    assert "the heading changed about +50 degrees" in text
 
 
 def test_turn_right(tools, car):
@@ -215,17 +262,24 @@ def test_turn_right(tools, car):
     assert "the heading changed about -45 degrees" in text
 
 
+def test_a_big_turn_goes_half_forward_half_reversing(tools, car):
+    text = use(tools.turn, angle_deg=90).content
+    # 0.45 m in all: half forward steering left, half reversing steering right
+    assert car.moves == [move(1.0, 30.0, 1.125), move(-1.0, -30.0, 1.125)]
+    assert text.startswith("Turned half forward, half reversing. The heading changed about +90 degrees")
+
+
 def test_turn_is_limited_to_120_degrees(tools, car):
     use(tools.turn, angle_deg=180)
-    assert car.moves == [move(1.0, 30.0, 3.0)]
+    assert car.moves == [move(1.0, 30.0, 1.5), move(-1.0, -30.0, 1.5)]
 
 
 def test_blocked_turn_reverses_the_rest_with_the_steering_the_other_way(tools, car):
-    car.results = [("obstacle", 0.25, 0.2)]   # a quarter of the 0.45 m, then blocked
-    text = use(tools.turn, angle_deg=90).content
-    assert car.moves == [move(1.0, 30.0, 2.25), move(-1.0, -30.0, 2.25 * 0.75)]
+    car.results = [("obstacle", 0.4, 0.2)]   # 0.1 m of the 0.25 m, then blocked
+    text = use(tools.turn, angle_deg=50).content
+    assert car.moves == [move(1.0, 30.0, 1.25), move(-1.0, -30.0, 0.75)]
     assert text.startswith("Blocked in front, so I turned the rest while reversing. "
-                           "The heading changed about +90 degrees")
+                           "The heading changed about +50 degrees")
 
 
 # ---------- look ----------
@@ -263,6 +317,7 @@ def test_look_around_stops_when_the_target_is_in_the_middle(tools, car, vision):
     assert car.looks == [(0.0, 0.0), (45.0, 0.0), (0.0, 0.0)]   # then back to straight ahead
     assert "seen with the camera at pan 45, middle of the picture" in text
     assert "about 45 degrees to the left of the car. Call turn with angle_deg 45" in text
+    assert text.endswith("then call approach. Reached so far: nothing yet.")
     assert "Is there a red box in this picture?" in vision.questions[0]
 
 
@@ -283,7 +338,7 @@ def test_look_around_prefers_the_middle_of_a_picture(tools, vision):
 def test_look_around_answers_that_mean_straight_ahead(tools, vision, answer):
     vision.answers = [answer]
     text = use(tools.look_around, target="red box").content
-    assert "about straight ahead. Drive at it." in text
+    assert "middle of the picture, about straight ahead. Call approach to drive to it." in text
 
 
 def test_look_around_not_seen(tools, car, vision):
@@ -300,15 +355,100 @@ def test_look_around_without_a_vision_model_sees_nothing(car):
 
 
 def test_look_around_does_not_search_for_a_reached_target(tools, car, vision):
+    stop_in_front(tools, car, vision)
     use(tools.reached, target="red box")
+    looks, questions = len(car.looks), len(vision.questions)
     text = use(tools.look_around, target="Red box").content
     assert text.startswith("You already reached the red box.")
-    assert car.looks == [] and vision.questions == []
+    assert len(car.looks) == looks and len(vision.questions) == questions
+
+
+# ---------- approach ----------
+
+@pytest.mark.parametrize("range_m, step_m", [
+    (1.0, 0.6),          # free up to the stop distance, at most 0.6 m a step
+    (0.5, 0.3),          # 0.5 - 0.25 stop distance + 0.05
+    (0.3, 0.2),          # never less than 0.2 m
+    (math.inf, 0.6),     # nothing in range
+    (-math.inf, 0.2),    # too close to measure
+    (math.nan, 0.4),     # no reading: a careful step
+])
+def test_approach_sizes_a_straight_step_by_the_distance_sensor(tools, car, vision, range_m, step_m):
+    car.range_m = range_m
+    car.results = [("obstacle", 1.0, 0.2)]
+    vision.answers = ["middle"]
+    use(tools.approach, target="red box")
+    assert car.moves == [move(1.0, 0.0, step_m / 0.2)]
+
+
+def test_approach_drives_until_the_safety_stop_then_reached_counts(tools, car, vision):
+    car.range_m = 1.0
+    car.results = [("done", 1.0, 4.0), ("obstacle", 0.5, 0.2)]
+    vision.answers = ["middle", "middle", "yes, red box"]
+    text = use(tools.approach, target="Red box").content
+    assert car.moves == [move(1.0, 0.0, 3.0), move(1.0, 0.0, 3.0)]
+    assert text.startswith("Approach to the red box: drove 0.60 m, drove 0.30 m. Safety stop: "
+                           "something is 0.20 m in front of the bumper.")
+    assert 'The camera check says: "yes, red box". If that is the red box, you have arrived' in text
+    assert use(tools.reached, target="red box").content.startswith("Noted: red box.")
+
+
+def test_approach_turns_towards_a_target_at_the_side_and_reverses_if_that_did_not_help(
+        tools, car, vision):
+    car.results = [("done", 1.0, 4.0), ("done", 1.0, 4.0), ("obstacle", 1.0, 0.2)]
+    vision.answers = ["left", "left", "middle"]
+    text = use(tools.approach, target="red box").content
+    # 20 degrees at 200 deg/m = 0.1 m at full steering, then the same while reversing
+    assert car.moves == [move(1.0, 30.0, 0.5), move(-1.0, -30.0, 0.5), move(1.0, 0.0, 3.0)]
+    assert text.startswith("Approach to the red box: turned left, turned left reversing, drove 0.60 m.")
+
+
+def test_approach_backs_up_towards_a_target_it_lost(tools, car, vision):
+    vision.answers = ["right", "no", "no"]
+    text = use(tools.approach, target="red box").content
+    # lost after a turn right: back up with the front swinging right (steering left)
+    assert car.moves == [move(1.0, -30.0, 0.5), move(-1.0, 15.0, 1.5)]
+    assert text == ("The red box is not in the picture straight ahead (turned right, lost it, "
+                    "backed up 0.30 m). Call look_around to find it. Reached so far: nothing yet.")
+
+
+def test_approach_without_the_target_in_the_picture_does_not_move(tools, car, vision):
+    text = use(tools.approach, target="red box").content
+    assert car.moves == []
+    assert text.startswith("The red box is not in the picture straight ahead (did not move).")
+
+
+def test_approach_stops_after_12_steps(tools, car, vision):
+    vision.answers = ["middle"] * 12
+    text = use(tools.approach, target="red box").content
+    assert len(car.moves) == 12
+    assert text.endswith("Not there yet: call approach again. Reached so far: nothing yet.")
+
+
+def test_approach_points_the_camera_ahead_first(tools, car, vision):
+    use(tools.look, pan_deg=45)
+    use(tools.approach, target="red box")
+    assert car.looks == [(45.0, 0.0), (0.0, 0.0)]
+
+
+def test_approach_does_not_drive_to_a_reached_target(tools, car, vision):
+    stop_in_front(tools, car, vision)
+    use(tools.reached, target="red box")
+    moves = len(car.moves)
+    text = use(tools.approach, target="red box").content
+    assert text.startswith("You already reached the red box.") and len(car.moves) == moves
 
 
 # ---------- reached ----------
 
-def test_reached_counts_each_target_once_and_names_the_next(tools):
+def test_reached_needs_the_safety_stop(tools):
+    text = use(tools.reached, target="red box").content
+    assert text.startswith("Not reached yet: the safety system has not stopped the car")
+    assert "Reached so far: nothing yet." in text
+
+
+def test_reached_counts_each_target_once_and_names_the_next(tools, car, vision):
+    stop_in_front(tools, car, vision)
     text = use(tools.reached, target="Red box", next_target="yellow box").content
     assert text == ("Noted: red box. Reached so far: red box. Next target: yellow box. "
                     "Back up from the red box, then call look_around for the yellow box.")
@@ -316,12 +456,24 @@ def test_reached_counts_each_target_once_and_names_the_next(tools):
     assert again.startswith("You already reached the red box. Do not drive to it again")
 
 
-def test_reached_the_last_target(tools):
+def test_reached_the_last_target(tools, car, vision):
+    stop_in_front(tools, car, vision, seen="yes, blue cylinder")
     text = use(tools.reached, target="blue cylinder").content
     assert "If that was the last target, finish with DONE." in text
 
 
-def test_pictures_show_the_progress_until_the_car_moves_away(tools):
+def test_reached_is_turned_down_once_when_the_camera_sees_something_else(tools, car, vision):
+    vision.answers = ["middle"]
+    use(tools.look_around, target="red box")   # the target the tools know about
+    stop_in_front(tools, car, vision, seen="no, white wall")
+    first = use(tools.reached, target="red box").content
+    assert first.startswith('Not reached yet: the camera check says the thing in front of the car '
+                            'is not the red box: "no, white wall".')
+    assert use(tools.reached, target="red box").content.startswith("Noted: red box.")
+
+
+def test_pictures_show_the_progress_until_the_car_moves_away(tools, car, vision):
+    stop_in_front(tools, car, vision)
     use(tools.reached, target="red box", next_target="yellow box")
     text = use(tools.look).content
     assert "Reached so far: red box. Next target: yellow box." in text
@@ -330,7 +482,8 @@ def test_pictures_show_the_progress_until_the_car_moves_away(tools):
     assert "still at" not in text and "Reached so far: red box." in text
 
 
-def test_a_new_task_forgets_the_targets(tools):
+def test_a_new_task_forgets_the_targets(tools, car, vision):
+    stop_in_front(tools, car, vision)
     use(tools.reached, target="red box")
     tools.new_task()
     assert "Reached so far: nothing yet." in use(tools.look).content

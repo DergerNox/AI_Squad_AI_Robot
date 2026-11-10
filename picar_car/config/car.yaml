@@ -1,0 +1,36 @@
+# Settings for the real PiCar-B, one section per node (started by car.launch.py).
+# The twin's values are in picar_base/config/sim.yaml. Measure them again on the car.
+
+camera:                      # camera_ros
+  ros__parameters:
+    format: RGB888           # arrives as bgr8, which the agent reads (the default can be 4-channel)
+    width: 640               # the same picture size as the twin
+    height: 480
+    FrameDurationLimits: [100000, 100000]   # 10 pictures a second, like the twin (microseconds each)
+    # Without sensor_mode, libcamera may crop the sensor to make 640x480: a narrow,
+    # zoomed-in view. A full-picture mode scaled down keeps the whole view: "1296:972"
+    # for the OV5647 camera (Camera Module 1), "1640:1232" for the IMX219 (Module 2).
+    # The camera node prints the available modes when it starts.
+    # sensor_mode: "1296:972"
+    # orientation: 180       # if the picture is upside down
+
+ultrasonic:                  # picar_car's distance sensor node (HC-SR04)
+  ros__parameters:
+    trigger_pin: 11          # BCM GPIO numbers, Adeept's wiring (their server/ultra.py)
+    echo_pin: 8
+    rate_hz: 10.0            # picar_base stops the car if no reading arrives for 0.3 s
+    max_range_m: 4.0
+
+picar_base:
+  ros__parameters:
+    backend: hw              # the hardware part of picar_base is not written yet
+    wheelbase_m: 0.145       # measure on the car
+    full_speed_mps: 0.5      # measure: speed at full motor power
+    max_steering_deg: 30.0
+    max_speed: 0.4           # fraction of full motor power
+    max_move_s: 3.0
+    cmd_timeout_s: 0.5
+    obstacle_stop_m: 0.25
+    range_timeout_s: 0.3
+    max_pan_deg: 90.0
+    max_tilt_deg: 40.0
