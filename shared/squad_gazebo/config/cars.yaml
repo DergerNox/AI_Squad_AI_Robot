@@ -1,0 +1,69 @@
+# The cars and worlds: `sim` asks which one, starts its Gazebo twin and then its agent.
+#
+# A file is [package, path inside the package's install/share folder],
+# or a plain path in quotes: "~/folder/file" or "/full/path/file".
+# The car's model name in Gazebo (gz model -m <name>) is its name here, or name: if given.
+#
+# Per car, for its terminal tab (`car <name>`, or picked in `sim`):
+#   folder:  where the tab goes        domain: its own ROS_DOMAIN_ID (0-101)
+#   venv:    the Python environment (default ~/rai_venv)
+# and optionally the agent `sim` starts once the twin's camera works:
+#   agent: {folder, run, env_file (loaded first), ask (send typed tasks with it),
+#           before (run before Gazebo starts), wait_for (default /camera/image_raw)}
+#
+# After editing this file: colcon build --packages-select squad_gazebo
+# (or try an edited copy without building: sim cars:=/path/to/cars.yaml)
+
+worlds:
+  room: [picar_gazebo, worlds/picar_room.sdf]      # 3 x 3 m room, red/blue/yellow targets
+  minirobot_room: "~/MiniRobotAI/minirobot_sim/minirobot_room.sdf"
+
+cars:
+  picar:
+    folder: "~/picar_ws"
+    domain: 51
+    model: [picar_description, urdf/picar.urdf.xacro]
+    world: room
+    spawn: {x: 0.0, y: 0.0, z: 0.01, yaw: 0.0}     # metres, degrees
+    bridges:
+      - {name: camera, config: [picar_gazebo, config/camera_bridge.yaml]}
+      - {name: ultrasonic, config: [picar_gazebo, config/ultrasonic_bridge.yaml]}
+      - {name: sim_bridge, config: [picar_gazebo, config/picar_bridge.yaml]}
+    nodes:
+      - package: picar_base
+        executable: picar_base
+        parameters:
+          - [picar_base, config/sim.yaml]
+    agent:                                          # as picar_agent/run.sh starts it
+      folder: "~/picar_ws/src/picar/shared/picar_agent"
+      run: python3 agent.py                         # reads its .env itself; has a > prompt
+      before: ollama stop qwen3-vl:4b-instruct      # frees the GPU before Gazebo starts
+
+  # MiniRobot: straight from the minirobot_sim folder, no build needed for it.
+  # arduino_bridge.py and camera_node.py must not run with the twin (see its README).
+  mini:
+    folder: "~/MiniRobotAI"
+    domain: 53
+    name: minirobot                                # as in minirobot_sim's README commands
+    model: "~/MiniRobotAI/minirobot_sim/minirobot.urdf.xacro"
+    world: minirobot_room
+    spawn: {z: 0.005}
+    bridges:
+      - config: "~/MiniRobotAI/minirobot_sim/bridge.yaml"
+    nodes:
+      - script: "~/MiniRobotAI/minirobot_sim/sim_sensors.py"   # /arduino_sensors "dist"
+        name: sim_sensors
+    agent:                                          # as minirobot_sim's README starts it
+      folder: "~/MiniRobotAI"
+      env_file: .env
+      run: python3 agent.py                         # waits for tasks on /from_human
+      ask: python3 minirobot_sim/ask.py             # sends each typed task
+
+  # Not modelled yet. Until this package exists, sim lists pccar as not ready.
+  pccar:
+    folder: "~/picar_ws"
+    domain: 52
+    model: [pccar_description, urdf/pccar.urdf.xacro]
+    world: room
+    bridges:
+      - config: [pccar_gazebo, config/pccar_bridge.yaml]

@@ -47,7 +47,7 @@ fast; check your quota.
 ## Run
 
 ```bash
-~/picar_ws/src/picar/picar_agent/run.sh
+~/picar_ws/src/picar/shared/picar_agent/run.sh
 ```
 
 Wait for `PiCar agent ready`, then type a task, for example

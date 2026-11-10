@@ -1,6 +1,6 @@
 """Testing plan, test 2: SafetyGate rules, no hardware or ROS needed.
 
-Run with:  cd ~/picar_ws/src/picar_sim/picar_base && python3 -m pytest test
+Run with:  cd ~/picar_ws/src/picar/shared/picar_base && python3 -m pytest test
 """
 
 import pytest

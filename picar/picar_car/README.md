@@ -8,7 +8,7 @@ real hardware instead of Gazebo:
 | `camera` | publishes `/camera/image_raw` | Gazebo bridge | `camera_ros` |
 | `ultrasonic` | publishes `/ultrasonic/range` | Gazebo bridge | this package |
 | `picar_base` | motors, steering, camera head, safety stop | sim backend | hw backend, **not written yet** |
-| agent | the AI (`picar_agent/agent.py`) | same | same |
+| agent | the AI (`shared/picar_agent/agent.py`) | same | same |
 | `command_listener` | prints the drive commands (`picar_listener`) | same | same |
 
 ## Install (once)

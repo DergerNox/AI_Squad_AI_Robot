@@ -5,3 +5,4 @@ artifact_database.pkl
 sim.log
 __pycache__/
 *.pyc
+.pytest_cache/

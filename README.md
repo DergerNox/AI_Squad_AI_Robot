@@ -12,6 +12,28 @@ ROS 2 Jazzy (`ros-jazzy-ros-base` és `ros-dev-tools`) van telepítve.
 - **Csomag (package)**: egy mappa kóddal; a `colcon build` parancs fordítja le.
 - **Workspace**: a `~/picar_ws` mappa; a csomagok az `src` mappában vannak.
 
+## A repó mappái
+
+- `shared/`: a közös kód, amelyet mindkét autó használ: az MI-ágens (`picar_agent`),
+  a `picar_base` (motorok, kormány, kameratartó, biztonsági megállás), a `Move` és `Look`
+  szolgáltatás leírása (`picar_interfaces`), a parancsfogadó node (`picar_listener`),
+  a Gazebo-beli digitális iker (`picar_gazebo`) és a `sim` parancs (`squad_gazebo`).
+- `picar/`: csak az Adeept PiCar-B-é: az autó modellje (`picar_description`) és a
+  Pi-n futó node-ok (`picar_car`).
+- `pccar/`: a második autó (táblagép + ESP32). Egyelőre csak a leírása van meg.
+
+A csomagok neve nem változott, ezért a `colcon build`, `ros2 run` és `ros2 launch`
+parancsok ugyanazok. Csak a mappák helye más: az ágens például a
+`~/picar_ws/src/picar/shared/picar_agent` mappában van.
+
+Ha a kódot még a régi mappákkal fordítottad le, a `git pull` után egyszer töröld a
+régi fordítást, és fordíts újra (1. pont):
+
+```bash
+cd ~/picar_ws
+rm -rf build install log
+```
+
 ## 1. A kód letöltése és fordítása (egyszer)
 
 ```bash
@@ -149,7 +171,7 @@ pip install rai-core
 Beállítás: hozd létre a `.env` fájlt a mintából, és írd bele, hol fut a modell:
 
 ```bash
-cd ~/picar_ws/src/picar/picar_agent
+cd ~/picar_ws/src/picar/shared/picar_agent
 cp .env.example .env
 nano .env
 ```
@@ -161,7 +183,7 @@ Indítás. A Pi-n ne a `run.sh`-t használd, mert az a Gazebót is elindítja:
 
 ```bash
 source ~/rai_venv/bin/activate
-cd ~/picar_ws/src/picar/picar_agent
+cd ~/picar_ws/src/picar/shared/picar_agent
 python3 agent.py
 ```
 
