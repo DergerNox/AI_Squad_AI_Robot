@@ -34,3 +34,22 @@ picar_base:
     range_timeout_s: 0.3
     max_pan_deg: 90.0
     max_tilt_deg: 40.0
+
+# What the AI knows about the car. The agent reads this file with PICAR_CONFIG=car (in its
+# .env on the Pi), plus picar_base's speed, limits and stop distance above. No ROS node uses
+# this section, but ROS reads the file: lists must be flat, all whole numbers or all decimals.
+# These are the twin's values: measure them on the car.
+picar_agent:
+  ros__parameters:
+    description: "an Adeept PiCar-B, a real car in a real room"   # what the AI is told it drives
+    length_m: 0.22
+    width_m: 0.10
+    turn_deg_per_m: 200.0     # measure: heading change per metre at full steering
+    head_deg_per_s: 150.0     # measure: how fast the camera head turns
+    camera_height_m: 0.17
+    camera_fov_deg: 62.0      # measure: how wide the picture is
+    # With tilt 0: how far down the picture an object touches the floor (0.5 = the middle
+    # row, 1.0 = the bottom edge), and how far from the bumper it is then. Measure on the car.
+    floor_rows: [1.0, 0.9, 0.8, 0.75, 0.7, 0.65, 0.6]
+    floor_distances_m: [0.35, 0.45, 0.6, 0.75, 0.9, 1.25, 1.9]
+    own_parts: "its wheels and parts of its body"   # say what colour they are on the real car

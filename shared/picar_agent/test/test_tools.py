@@ -2,13 +2,15 @@
 
 FakeCar answers like picar_base and the camera and distance sensor nodes, and records
 every request. FakeVision gives scripted answers to the tools' picture questions, and
-FakeTime makes the waits instant.
+FakeTime makes the waits instant. The car's numbers are the twin's, from its sim.yaml.
 """
 
 import base64
+import dataclasses
 import io
 import json
 import math
+import pathlib
 from types import SimpleNamespace
 
 import numpy as np
@@ -16,7 +18,12 @@ import pytest
 from PIL import Image
 from rai.communication.ros2 import ROS2Message
 
+import camera
+import car_config
 import picar_tools
+
+SHARED = pathlib.Path(__file__).resolve().parents[2]   # shared/picar_agent/test -> shared
+TWIN = car_config.load_car(str(SHARED / "picar_base" / "config" / "sim.yaml"))
 
 
 class FakeTime:
@@ -52,6 +59,10 @@ class FakeCar:
     After the last one, RAI hands out the last picture again, as it does when the
     camera node stops.
 
+    image: what the camera sees. next_image: what it sees after the next look or move.
+    stale_first: after each look or move, RAI first hands out the last picture again
+    (taken before the move), as it does when the next picture has not arrived yet.
+
     range_m: what the distance sensor reads.
     """
 
@@ -62,22 +73,31 @@ class FakeCar:
         self.results = []
         self.calls = []     # "look" and "move", in the order they came
         self.image = SimpleNamespace(height=2, width=2, encoding="rgb8", data=bytes(12))
+        self.next_image = None
+        self.stale_first = False
+        self.stale_now = False
         self.frames = None
         self.last_frame = 0.0
+        self.last_image = self.image
         self.range_m = math.inf
 
     def receive_message(self, topic, **kwargs):
         if topic == "/ultrasonic/range":
             return ROS2Message(payload=SimpleNamespace(range=self.range_m, max_range=4.0))
         assert topic == "/camera/image_raw"
-        if self.frames is None or self.frames > 0:
+        if self.stale_now:
+            self.stale_now = False
+        elif self.frames is None or self.frames > 0:
             self.clock.now += 0.1   # the next picture arrives (10 a second)
-            self.last_frame = self.clock.now
+            self.last_frame, self.last_image = self.clock.now, self.image
             if self.frames is not None:
                 self.frames -= 1
-        return ROS2Message(payload=self.image, timestamp=self.last_frame)
+        return ROS2Message(payload=self.last_image, timestamp=self.last_frame)
 
     def service_call(self, message, target, msg_type, **kwargs):
+        if self.next_image is not None:   # the head or the car moves: the camera sees something new
+            self.image, self.next_image = self.next_image, None
+        self.stale_now = self.stale_first
         request = message.payload
         if target == "/picar/look":
             self.calls.append("look")
@@ -108,12 +128,20 @@ class FakeVision:
         return SimpleNamespace(content=self.answers.pop(0) if self.answers else "no")
 
 
+AGENT_MEMORY_FILE = picar_tools.MEMORY_FILE   # the real one, before the fixture below
+
+
+@pytest.fixture(autouse=True)
+def memory_file(monkeypatch, tmp_path):
+    """Every test keeps its facts in a memory.json of its own, never the agent's."""
+    path = str(tmp_path / "memory.json")
+    monkeypatch.setattr(picar_tools, "MEMORY_FILE", path)
+    return path
+
+
 @pytest.fixture
-def clock(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)   # memory.json is written here, not into picar_agent/
-    fake = FakeTime()
-    monkeypatch.setattr(picar_tools, "time", fake)
-    return fake
+def clock():
+    return FakeTime()
 
 
 @pytest.fixture
@@ -131,8 +159,9 @@ def tools(car, vision):
     return make_tools(car, vision)
 
 
-def make_tools(car, vision):
-    tool_list, new_task, memory = picar_tools.make_picar_tools(car, vision)
+def make_tools(car, vision, numbers=TWIN):
+    """The tools for a fake car (car), with the car's numbers from its settings (numbers)."""
+    tool_list, new_task, memory = picar_tools.make_picar_tools(car, vision, numbers, car.clock)
     return SimpleNamespace(**{t.name: t for t in tool_list}, new_task=new_task, memory=memory)
 
 
@@ -157,6 +186,43 @@ def stop_in_front(tools, car, vision, seen="yes, red box"):
     car.results = [("obstacle", 0.0, 0.2)]
     vision.answers = [seen]
     use(tools.drive, distance_m=0.3)
+
+
+# ---------- the car's numbers ----------
+
+# Another car: every number differs from the twin's
+OTHER = dataclasses.replace(TWIN, speed_mps=0.25, max_move_s=2.0, max_steering_deg=25.0,
+                            max_pan_deg=60.0, max_tilt_deg=20.0, turn_deg_per_m=100.0,
+                            head_deg_per_s=100.0, stop_distance_m=0.5)
+
+
+def test_the_tools_use_the_cars_numbers(car, vision, clock):
+    tools = make_tools(car, vision, OTHER)
+    text = use(tools.drive, distance_m=2.0, steering_deg=45).content
+    assert car.moves == [move(1.0, 25.0, 2.0)]    # 0.5 m at most (0.25 m/s x 2 s)
+    assert "0.5 m is the most per call." in text
+    use(tools.turn, angle_deg=30)                 # 30 deg at 100 deg/m = 0.3 m
+    assert car.moves[-1] == move(1.0, 25.0, 1.2)
+    use(tools.look, pan_deg=80, tilt_deg=30)
+    assert car.looks[-1] == (60.0, 20.0)
+    assert clock.slept[-1] == pytest.approx(0.4 + 60 / 100)   # the head turned 60 deg at 100 deg/s
+
+
+def test_the_tool_descriptions_give_the_cars_limits(car, vision):
+    tools = make_tools(car, vision, OTHER)
+    assert "at most 0.5 per call" in tools.drive.description
+    assert "steering_deg: -25 to 25" in tools.drive.description
+    assert "pan_deg: -60 to 60" in tools.look.description
+    assert "tilt_deg: -20 to 20" in tools.look.description
+
+
+def test_approach_steps_stop_short_of_the_cars_stop_distance(car, vision):
+    tools = make_tools(car, vision, OTHER)
+    car.range_m = 0.9
+    car.results = [("obstacle", 1.0, 0.5)]
+    vision.answers = ["middle"]
+    use(tools.approach, target="red box")
+    assert car.moves == [move(1.0, 0.0, 0.45 / 0.25)]   # 0.9 - 0.5 stop distance + 0.05
 
 
 # ---------- drive ----------
@@ -191,6 +257,16 @@ def test_drive_points_the_camera_straight_ahead_first(tools, car):
 def test_drive_returns_a_picture(tools):
     picture = use(tools.drive, distance_m=0.2).artifact
     assert len(picture["images"]) == 1
+
+
+def test_moving_away_counts_the_tries_again_from_zero(tools, car, vision):
+    car.results = [("obstacle", 0.0, 0.2), ("obstacle", 0.0, 0.2), ("done", 1.0, 4.0),
+                   ("obstacle", 0.0, 0.2)]
+    use(tools.drive, distance_m=0.4)
+    assert "You have tried 2 times." in use(tools.drive, distance_m=0.4).content
+    use(tools.drive, distance_m=-0.3)   # backs away: a new spot
+    text = use(tools.drive, distance_m=0.4).content
+    assert text.startswith("Did not move") and "You have tried" not in text
 
 
 def test_blocked_drive_says_it_did_not_move_and_asks_the_camera_once(tools, car, vision):
@@ -233,9 +309,9 @@ def test_no_answer_from_picar_base(tools, car):
 
 def test_drive_and_turn_do_not_move_without_new_pictures(tools, car):
     car.frames = 0   # the camera has stopped: only its last picture is left
-    with pytest.raises(picar_tools.CameraDown, match="The car did not move. The camera has sent"):
+    with pytest.raises(camera.CameraDown, match="The car did not move. The camera has sent"):
         use(tools.drive, distance_m=0.5)
-    with pytest.raises(picar_tools.CameraDown, match="The car did not move."):
+    with pytest.raises(camera.CameraDown, match="The car did not move."):
         use(tools.turn, angle_deg=30)
     assert car.moves == []
 
@@ -300,6 +376,22 @@ def test_the_camera_waits_for_the_head_to_get_there(tools, clock):
     use(tools.look)                 # where the head points is unknown: the longest wait
     use(tools.look, pan_deg=45)     # 45 degrees at 150 degrees/s
     assert clock.slept == [pytest.approx(0.4 + 180 / 150), pytest.approx(0.4 + 45 / 150)]
+
+
+RED = SimpleNamespace(height=1, width=1, encoding="rgb8", data=bytes([255, 0, 0]))
+BLUE = SimpleNamespace(height=1, width=1, encoding="rgb8", data=bytes([0, 0, 255]))
+
+
+@pytest.mark.parametrize("call", [
+    lambda tools: use(tools.look, pan_deg=45),
+    lambda tools: use(tools.drive, distance_m=0.3),
+], ids=["look", "drive"])
+def test_a_picture_is_never_one_from_before_the_car_or_the_camera_moved(tools, car, call):
+    car.image = RED
+    use(tools.look)              # the newest picture RAI holds is red
+    car.stale_first = True       # and it hands that one out first after the next move
+    car.next_image = BLUE        # after which the camera sees blue
+    assert pixel(call(tools).artifact) == (0, 0, 255)
 
 
 def test_bgr_pictures_are_turned_into_rgb(tools, car):
@@ -498,10 +590,24 @@ def test_remember_keeps_the_newest_20_facts_across_restarts(tools, car, vision):
     assert restarted.memory == [f"fact {n}" for n in range(5, 25)]
 
 
-def test_a_broken_memory_file_starts_empty(clock):
-    with open(picar_tools.MEMORY_FILE, "w") as f:
+def test_a_broken_memory_file_starts_empty(memory_file):
+    with open(memory_file, "w") as f:
         f.write("{not json")
     assert picar_tools.load_memory() == []
+    with open(memory_file, "w") as f:
+        f.write('{"not": "a list"}')
+    assert picar_tools.load_memory() == []
     picar_tools.save_memory(["a fact"])
-    with open(picar_tools.MEMORY_FILE) as f:
+    with open(memory_file) as f:
         assert json.load(f) == ["a fact"]
+
+
+def test_memory_is_next_to_agent_py_whatever_folder_the_agent_starts_in():
+    assert AGENT_MEMORY_FILE == str(SHARED / "picar_agent" / "memory.json")
+
+
+def test_remember_can_use_another_memory_file(car, vision, tmp_path):
+    other = tmp_path / "other.json"
+    tool_list, _, memory = picar_tools.make_picar_tools(car, vision, TWIN, car.clock, str(other))
+    next(t for t in tool_list if t.name == "remember").invoke({"fact": "the red box is ahead"})
+    assert json.loads(other.read_text()) == ["the red box is ahead"]

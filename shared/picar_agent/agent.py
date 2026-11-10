@@ -9,6 +9,8 @@ Which AI it uses is set in .env (see .env.example), no code changes needed:
     PICAR_MODEL     the model name; it must understand pictures and call tools
     PICAR_BASE_URL  the server address, if it is not the default one
     OPENAI_API_KEY / GOOGLE_API_KEY   the key for a cloud model
+    PICAR_CONFIG    which car: sim (the twin, the default), car (the real PiCar-B) or a
+                    settings file (see car_config.py)
 """
 
 import logging
@@ -36,7 +38,10 @@ from rai.agents.langchain import HRICallbackHandler, ReActAgentState, create_rea
 from rai.communication.ros2 import ROS2Connector, ROS2Context, ROS2HRIConnector, ROS2HRIMessage
 from rclpy.logging import get_logger
 
-from picar_tools import PICAR_PROMPT, compress_history, make_picar_tools, save_memory
+from car_config import load_car
+from history import compress_history
+from picar_tools import make_picar_tools, save_memory
+from prompt import picar_prompt
 
 # Hide the log lines for every model request and every streamed word
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -104,12 +109,15 @@ class PicarAgent(BaseAgent):
         self.ros2_connector = ROS2Connector()     # the car's services and camera
         llm, description = make_llm()
         get_logger("agent").info(f"AI model: {description}")
+        car = load_car()   # the car's numbers, from PICAR_CONFIG's settings file
+        get_logger("agent").info(f"Car: {car.description} ({car.file})")
+        self.prompt = picar_prompt(car)
         # The same model also answers the tools' short questions about pictures
-        tools, self.new_task, self.memory = make_picar_tools(self.ros2_connector, llm)
+        tools, self.new_task, self.memory = make_picar_tools(self.ros2_connector, llm, car)
         self.agent = create_react_runnable(
             llm=llm,
             tools=tools,
-            system_prompt=PICAR_PROMPT,
+            system_prompt=self.prompt,
         )
         self.state = ReActAgentState(messages=[])
         self.callbacks = [
@@ -131,7 +139,7 @@ class PicarAgent(BaseAgent):
             # its old answers, but it gets the facts it saved with remember.
             notes = "\n".join(f"- {fact}" for fact in self.memory) or "- nothing yet"
             self.state = ReActAgentState(messages=[
-                SystemMessage(content=f"{PICAR_PROMPT}\nWhat you remember from earlier tasks:\n{notes}"),
+                SystemMessage(content=f"{self.prompt}\nWhat you remember from earlier tasks:\n{notes}"),
                 HumanMessage(content=text),
             ])
             self.new_task()   # forget the targets reached in the last task

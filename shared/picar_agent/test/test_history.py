@@ -3,7 +3,7 @@
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from rai.messages import HumanMultimodalMessage
 
-from picar_tools import caption_picture, compress_history
+from history import caption_picture, compress_history
 
 IMAGE = "iVBORw0KGgo="   # stands in for a base64 picture; never decoded here
 

@@ -10,9 +10,15 @@ the real car through the same ROS 2 names.
 | File | What it does |
 |---|---|
 | `agent.py` | The AI connection and the loop: model, conversation, your input and its answers |
-| `picar_tools.py` | The car side: the tools (drive, turn, look, look_around, approach, reached, remember) and the prompt |
+| `picar_tools.py` | The tools: drive, turn, look, look_around, approach, reached, remember |
+| `car_client.py` | Talks to the car: picar_base's moves and camera head, the distance sensor |
+| `camera.py` | Gets the camera's newest picture (never an old one) and turns it into the model's picture |
+| `car_config.py` | Reads the car's numbers from its settings file, the same one picar_base uses |
+| `prompt.py` | What the AI is told: its tools, the car (with its numbers) and how to drive |
+| `history.py` | Keeps the conversation short enough for the model's context |
 | `run.sh` | Starts the Gazebo twin in the background and the agent in the terminal |
-| `.env.example` | The settings: which AI to use, and its key. Copy it to `.env` |
+| `.env.example` | The settings: which AI to use, its key, and which car. Copy it to `.env` |
+| `test/` | The tests (`python3 -m pytest test`, in `~/rai_venv` with ROS sourced) and, in `test/twin/`, the stand-ins for the twin |
 
 ## What it needs
 
@@ -37,8 +43,9 @@ nano .env
 | `PICAR_MODEL` | The model name. Empty means `qwen3-vl:4b-instruct` for Ollama |
 | `PICAR_BASE_URL` | The server address, if it is not the default |
 | `OPENAI_API_KEY`, `GOOGLE_API_KEY` | The key for a cloud model |
+| `PICAR_CONFIG` | Which car: `sim` (the Gazebo twin, the default), `car` (the real PiCar-B: set it on the Pi) or the path of a settings file |
 
-When the agent starts, it prints which model it uses.
+When the agent starts, it prints which model it uses and which car.
 
 One task with three targets takes 50 or more model requests, because every step
 is one request and each `look_around` adds up to five. Free cloud tiers run out
@@ -81,7 +88,12 @@ per move, speed limit), so the AI cannot drive the car into a wall.
 ## Change things
 
 - Another AI: only `.env`, or `make_llm()` in `agent.py` for another kind of service
-- What the AI knows about the car, and the car's numbers: `PICAR_PROMPT` and the
-  constants at the top of `picar_tools.py` (measured in the twin; measure them
-  again on the real car)
-- Another sensor for the AI: read its topic in `picar_tools.py`, like `range_ahead()` does
+- The car's numbers: the settings file `PICAR_CONFIG` names. The speed, the limits and
+  the stop distance come from its `picar_base` section, so the agent and picar_base
+  always agree; the size, the turning, the camera and the floor distances from its
+  `picar_agent` section. The twin's are in `picar_base/config/sim.yaml` (measured in the
+  twin), the real car's in `picar/picar_car/config/car.yaml` (the twin's for now:
+  measure them on the car).
+- What the AI is told about the car and how to drive: `picar_prompt()` in `prompt.py`
+- Another sensor for the AI: read its topic in `car_client.py`, like `range_ahead()` does,
+  and use it in a tool in `picar_tools.py`
