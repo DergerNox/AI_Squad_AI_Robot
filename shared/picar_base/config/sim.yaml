@@ -4,6 +4,8 @@
 picar_base:
   ros__parameters:
     backend: sim
+    use_sim_time: true        # time moves and the safety rules by Gazebo's clock
+    range_topics: ["/ultrasonic/range"]   # the distance sensors that guard the way ahead
     wheelbase_m: 0.145        # same as wheel_base in picar.urdf.xacro
     full_speed_mps: 0.5       # twin speed at full motor power (the connector maps 0.5 m/s the same way)
     max_steering_deg: 30.0

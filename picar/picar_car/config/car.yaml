@@ -23,7 +23,8 @@ ultrasonic:                  # picar_car's distance sensor node (HC-SR04)
 
 picar_base:
   ros__parameters:
-    backend: hw              # the hardware part of picar_base is not written yet
+    backend: hw              # picar_car.hw_backend: not written yet (see picar_base/backend.py)
+    range_topics: ["/ultrasonic/range"]   # the distance sensors that guard the way ahead
     wheelbase_m: 0.145       # measure on the car
     full_speed_mps: 0.5      # measure: speed at full motor power
     max_steering_deg: 30.0

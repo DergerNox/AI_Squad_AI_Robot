@@ -31,7 +31,7 @@ Gazebo standing in for the hardware:
 |---|---|---|
 | `camera` | bridge node, `config/camera_bridge.yaml` | `camera_ros` |
 | `ultrasonic` | bridge node, `config/ultrasonic_bridge.yaml` | `ultrasonic` in `picar_car` |
-| `picar_base` | sim backend, `picar_base/config/sim.yaml` | hw backend |
+| `picar_base` | sim backend, `picar_base/config/sim.yaml` (timed by Gazebo's clock) | hw backend |
 | `sim_bridge` | carries picar_base's motor and servo commands to Gazebo, `config/picar_bridge.yaml` | not needed |
 | `robot_state_publisher` | the car model, for RViz | |
 
@@ -56,8 +56,9 @@ a car can't turn on the spot.
 | `/camera/camera_info` | sensor_msgs/CameraInfo | `camera` | |
 | `/ultrasonic/range` | sensor_msgs/Range | `ultrasonic` | 10 Hz, 0.02–4 m; above 4 m means nothing in range |
 | `/picar/status` | std_msgs/String | `picar_base` | 2 Hz: ok, timeout, obstacle, no_range or estop |
+| `/picar/odom` | nav_msgs/Odometry | `picar_base` | 10 Hz. Where the car should be, from what picar_base sent (no encoders) |
 | `/sim/cmd_vel`, `/sim/head_pan`, `/sim/head_tilt` | | `picar_base` | Twin only, to Gazebo |
-| `/sim/odom` | nav_msgs/Odometry | `sim_bridge` | Twin only. Wheel odometry |
+| `/sim/odom` | nav_msgs/Odometry | `sim_bridge` | Twin only. Gazebo's wheel odometry: the real car has none, so not for the agent |
 | `/joint_states`, `/tf` | | `sim_bridge` | For RViz |
 | `/clock` | rosgraph_msgs/Clock | `sim_bridge` | Run your own nodes with `use_sim_time:=true` |
 

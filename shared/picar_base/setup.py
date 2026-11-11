@@ -15,7 +15,7 @@ setup(
     zip_safe=True,
     maintainer='ferin',
     maintainer_email='todo@example.com',
-    description='SafetyGate and drive node for the PiCar-B (sim backend)',
+    description='SafetyGate and drive node for the squad cars; backends move the hardware or the twin',
     license='Apache-2.0',
     extras_require={'test': ['pytest']},
     entry_points={
