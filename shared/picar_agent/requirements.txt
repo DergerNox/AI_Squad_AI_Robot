@@ -1,0 +1,8 @@
+# The agent's Python packages, for ~/rai_venv (made with --system-site-packages, so it
+# also sees ROS 2). setup_car.sh installs them:  ~/rai_venv/bin/pip install -r requirements.txt
+# The versions are the ones the agent was tested with on Ferenc's PC (2026-11).
+rai-core==2.12.1          # RAI: the agent framework; brings LangChain, LangGraph and OpenCV
+langchain-ollama==1.1.0   # PICAR_LLM=ollama
+langchain-openai==1.7.2   # PICAR_LLM=openai
+langchain-google-genai==4.4.2   # PICAR_LLM=google
+python-dotenv==1.2.4      # reads .env
