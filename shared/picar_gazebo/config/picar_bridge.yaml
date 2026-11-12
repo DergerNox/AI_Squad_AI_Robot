@@ -1,8 +1,9 @@
-# ros_gz_bridge topics for the twin's simulated car hardware (node sim_bridge):
-# the motors, the servos, the wheel odometry and the clock. picar_base drives these
-# in the twin; on the real car it drives the hardware directly instead.
-# The camera and the distance sensor have their own bridge nodes, like on the real
-# car: see camera_bridge.yaml and ultrasonic_bridge.yaml.
+# ros_gz_bridge topics for the twin's simulated car hardware (node sim_bridge): the
+# motors, the servos, the distance sensor's raw reading, Gazebo's odometry and the clock.
+# picar_base drives these in the twin; on the real car it drives the hardware instead.
+# Everything here that the real car does not have is under /sim/, so the agent never
+# gets it. The camera has its own bridge node (camera_bridge.yaml), and the distance
+# sensor its own node (sim_ultrasonic, node name ultrasonic), like on the real car.
 # Gazebo-side names match the <topic> settings in picar.urdf.xacro.
 
 # Simulation time
@@ -39,14 +40,25 @@
   gz_type_name: "gz.msgs.Model"
   direction: GZ_TO_ROS
 
-# Wheel odometry and the odom -> base_footprint transform
+# The distance sensor, exact: the lidar fan's shortest ray as a Range. The ultrasonic node
+# (sim_ultrasonic.py) adds the real sensor's noise and missing echoes and publishes it
+# on /ultrasonic/range, as the real car's ultrasonic node does.
+- ros_topic_name: "/sim/ultrasonic/range"
+  gz_topic_name: "/ultrasonic/range"
+  ros_type_name: "sensor_msgs/msg/Range"
+  gz_type_name: "gz.msgs.LaserScan"
+  direction: GZ_TO_ROS
+
+# Gazebo's wheel odometry and its odom -> base_footprint transform. Twin only, for tests
+# and RViz: the real car has no wheel encoders, so the agent must never use these.
+# picar_base's own estimate is /picar/odom.
 - ros_topic_name: "/sim/odom"
   gz_topic_name: "/sim/odom"
   ros_type_name: "nav_msgs/msg/Odometry"
   gz_type_name: "gz.msgs.Odometry"
   direction: GZ_TO_ROS
 
-- ros_topic_name: "/tf"
+- ros_topic_name: "/sim/tf"
   gz_topic_name: "/sim/tf"
   ros_type_name: "tf2_msgs/msg/TFMessage"
   gz_type_name: "gz.msgs.Pose_V"

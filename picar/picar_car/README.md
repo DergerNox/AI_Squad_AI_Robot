@@ -6,7 +6,7 @@ real hardware instead of Gazebo:
 | Node | What it does | Twin | Real car |
 |---|---|---|---|
 | `camera` | publishes `/camera/image_raw` | Gazebo bridge | `camera_ros` |
-| `ultrasonic` | publishes `/ultrasonic/range` | Gazebo bridge | this package |
+| `ultrasonic` | publishes `/ultrasonic/range` | `picar_gazebo`'s `sim_ultrasonic.py` (Gazebo's reading, with noise and missing echoes) | this package |
 | `picar_base` | motors, steering, camera head, safety stop | sim backend | hw backend, **not written yet** |
 | agent | the AI (`shared/picar_agent/agent.py`) | same | same |
 | `command_listener` | prints the drive commands (`picar_listener`) | same | same |

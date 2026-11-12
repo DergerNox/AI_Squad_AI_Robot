@@ -16,7 +16,6 @@ the real car through the same ROS 2 names.
 | `car_config.py` | Reads the car's numbers from its settings file, the same one picar_base uses |
 | `prompt.py` | What the AI is told: its tools, the car (with its numbers) and how to drive |
 | `history.py` | Keeps the conversation short enough for the model's context |
-| `run.sh` | Starts the Gazebo twin in the background and the agent in the terminal |
 | `.env.example` | The settings: which AI to use, its key, and which car. Copy it to `.env` |
 | `test/` | The tests (`python3 -m pytest test`, in `~/rai_venv` with ROS sourced) and, in `test/twin/`, the stand-ins for the twin |
 
@@ -53,13 +52,26 @@ fast; check your quota.
 
 ## Run
 
+With the twin, in a new terminal (the `sim` command: see `squad_gazebo`'s README for the
+one line it needs in `~/.bashrc`):
+
 ```bash
-~/picar_ws/src/picar/shared/picar_agent/run.sh
+sim          # pick picar and the room: Gazebo opens, then the agent starts here
 ```
 
 Wait for `PiCar agent ready`, then type a task, for example
 `drive to the red box, then the yellow box, then the blue cylinder`.
-Type `forget` to clear what the AI has remembered, Ctrl+C to quit.
+Type `forget` to clear what the AI has remembered, Ctrl+C to stop the agent and the twin.
+
+The twin runs on the PiCar-B's own ROS domain, so a second terminal sees it only after
+`car picar`:
+
+```bash
+car picar
+ros2 topic echo /ultrasonic/range --field range
+```
+
+On the real car (no twin), start the agent itself: `python3 agent.py` in this folder.
 
 Tasks can also come from any ROS 2 program, and the answers go out on a topic:
 

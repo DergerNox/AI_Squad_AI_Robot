@@ -27,14 +27,15 @@ cars:
     spawn: {x: 0.0, y: 0.0, z: 0.01, yaw: 0.0}     # metres, degrees
     bridges:
       - {name: camera, config: [picar_gazebo, config/camera_bridge.yaml]}
-      - {name: ultrasonic, config: [picar_gazebo, config/ultrasonic_bridge.yaml]}
       - {name: sim_bridge, config: [picar_gazebo, config/picar_bridge.yaml]}
     nodes:
       - package: picar_base
         executable: picar_base
         parameters:
           - [picar_base, config/sim.yaml]
-    agent:                                          # as picar_agent/run.sh starts it
+      # the distance sensor, with the real sensor's noise and missing echoes
+      - {package: picar_gazebo, executable: sim_ultrasonic.py, name: ultrasonic}
+    agent:                                          # the PiCar agent, in this tab
       folder: "~/picar_ws/src/picar/shared/picar_agent"
       run: python3 agent.py                         # reads its .env itself; has a > prompt
       before: ollama stop qwen3-vl:4b-instruct      # frees the GPU before Gazebo starts

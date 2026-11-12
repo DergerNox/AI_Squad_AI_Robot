@@ -5,7 +5,8 @@ The real car's twin, for testing code on a PC. Four ROS 2 Jazzy packages for Gaz
 - `picar_interfaces`: the `Move` and `Look` services.
 - `picar_base`: drives the car through the SafetyGate (speed limit, obstacle stop, timeouts). In the twin it drives Gazebo.
 - `picar_description`: the car model in `urdf/picar.urdf.xacro`, with rear-wheel drive, Ackermann front steering, a pan/tilt camera head and an ultrasonic sensor.
-- `picar_gazebo`: a 3 m × 3 m test room, the bridge settings and `sim.launch.py`.
+- `picar_gazebo`: a 3 m × 3 m test room, the bridge settings, the twin's distance sensor node
+  (`scripts/sim_ultrasonic.py`) and `sim.launch.py`.
 
 ## Build
 
@@ -22,6 +23,9 @@ ros2 launch picar_gazebo sim.launch.py                  # with the Gazebo window
 ros2 launch picar_gazebo sim.launch.py headless:=true   # no window
 ```
 
+This is the same launch as `sim` with the PiCar-B (`squad_gazebo`): which nodes and bridges
+the twin starts is set in `squad_gazebo/config/cars.yaml`.
+
 ## Nodes
 
 The twin runs the same nodes as the real car (`picar_car/launch/car.launch.py`), with
@@ -30,9 +34,9 @@ Gazebo standing in for the hardware:
 | Node | Twin | Real car |
 |---|---|---|
 | `camera` | bridge node, `config/camera_bridge.yaml` | `camera_ros` |
-| `ultrasonic` | bridge node, `config/ultrasonic_bridge.yaml` | `ultrasonic` in `picar_car` |
+| `ultrasonic` | `sim_ultrasonic.py`: Gazebo's exact reading with the real sensor's noise (1 cm) and missing echoes (2%) | `ultrasonic` in `picar_car` |
 | `picar_base` | sim backend, `picar_base/config/sim.yaml` (timed by Gazebo's clock) | hw backend |
-| `sim_bridge` | carries picar_base's motor and servo commands to Gazebo, `config/picar_bridge.yaml` | not needed |
+| `sim_bridge` | picar_base's motor and servo commands to Gazebo, the sensor's exact reading, Gazebo's odometry and the clock, `config/picar_bridge.yaml` | not needed |
 | `robot_state_publisher` | the car model, for RViz | |
 
 Drive it from a second terminal:
@@ -54,12 +58,13 @@ a car can't turn on the spot.
 | `/cmd_vel` | geometry_msgs/Twist | teleop, your nodes | In. Through the SafetyGate |
 | `/camera/image_raw` | sensor_msgs/Image | `camera` | 640×480 at 10 Hz, frame `camera_optical_link` |
 | `/camera/camera_info` | sensor_msgs/CameraInfo | `camera` | |
-| `/ultrasonic/range` | sensor_msgs/Range | `ultrasonic` | 10 Hz, 0.02–4 m; above 4 m means nothing in range |
+| `/ultrasonic/range` | sensor_msgs/Range | `ultrasonic` | 10 Hz, 0.02–4 m; +inf nothing in range, -inf too close, NaN no echo (about 2%) |
 | `/picar/status` | std_msgs/String | `picar_base` | 2 Hz: ok, timeout, obstacle, no_range or estop |
 | `/picar/odom` | nav_msgs/Odometry | `picar_base` | 10 Hz. Where the car should be, from what picar_base sent (no encoders) |
 | `/sim/cmd_vel`, `/sim/head_pan`, `/sim/head_tilt` | | `picar_base` | Twin only, to Gazebo |
-| `/sim/odom` | nav_msgs/Odometry | `sim_bridge` | Twin only. Gazebo's wheel odometry: the real car has none, so not for the agent |
-| `/joint_states`, `/tf` | | `sim_bridge` | For RViz |
+| `/sim/ultrasonic/range` | sensor_msgs/Range | `sim_bridge` | Twin only. Gazebo's exact reading, before the noise |
+| `/sim/odom`, `/sim/tf` | | `sim_bridge` | Twin only. Gazebo's wheel odometry and odom → base_footprint: the real car has none, so never for the agent |
+| `/joint_states` | sensor_msgs/JointState | `sim_bridge` | For robot_state_publisher, which publishes the car's own `/tf` |
 | `/clock` | rosgraph_msgs/Clock | `sim_bridge` | Run your own nodes with `use_sim_time:=true` |
 
 Services, all from `picar_base`: `/picar/move`, `/picar/look`, `/picar/stop`, `/picar/estop`.
@@ -68,7 +73,7 @@ Services, all from `picar_base`: `/picar/move`, `/picar/look`, `/picar/stop`, `/
 
 ```bash
 ros2 node list                                       # camera, ultrasonic, picar_base, sim_bridge, ...
-ros2 topic echo /ultrasonic/range --field range      # about 0.71 m at start: red box ahead
+ros2 topic echo /ultrasonic/range --field range      # about 0.71 m at start (red box ahead), now and then .nan
 ros2 run rqt_image_view rqt_image_view /camera/image_raw
 ros2 service call /picar/look picar_interfaces/srv/Look "{pan_deg: 30.0, tilt_deg: 0.0}"   # look left
 ```

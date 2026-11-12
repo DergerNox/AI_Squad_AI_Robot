@@ -1,9 +1,0 @@
-# The twin's distance sensor node (node name: ultrasonic). The bridge turns the lidar
-# fan in the car model into a Range holding the shortest ray. On the real car, the
-# ultrasonic node in picar_car publishes the same topic.
-
-- ros_topic_name: "/ultrasonic/range"
-  gz_topic_name: "/ultrasonic/range"
-  ros_type_name: "sensor_msgs/msg/Range"
-  gz_type_name: "gz.msgs.LaserScan"
-  direction: GZ_TO_ROS

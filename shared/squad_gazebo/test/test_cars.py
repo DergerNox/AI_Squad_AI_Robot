@@ -43,9 +43,10 @@ def test_picar_entry_points_at_real_files():
     assert car.model.endswith('picar_description/urdf/picar.urdf.xacro')
     assert car.world.endswith('picar_gazebo/worlds/picar_room.sdf')
     assert [b.config.split('picar_gazebo/')[1] for b in car.bridges] == [
-        'config/camera_bridge.yaml', 'config/ultrasonic_bridge.yaml', 'config/picar_bridge.yaml']
-    assert [b.name for b in car.bridges] == ['camera', 'ultrasonic', 'sim_bridge']
-    assert [(n.package, n.executable, n.name) for n in car.nodes] == [('picar_base', 'picar_base', '')]
+        'config/camera_bridge.yaml', 'config/picar_bridge.yaml']
+    assert [b.name for b in car.bridges] == ['camera', 'sim_bridge']
+    assert [(n.package, n.executable, n.name) for n in car.nodes] == [
+        ('picar_base', 'picar_base', ''), ('picar_gazebo', 'sim_ultrasonic.py', 'ultrasonic')]
     assert car.nodes[0].parameters[0].endswith('picar_base/config/sim.yaml')
     assert car.spawn == {'x': 0.0, 'y': 0.0, 'z': 0.01, 'yaw': 0.0}
     for path in [car.model, car.world, car.bridges[0].config, car.nodes[0].parameters[0]]:

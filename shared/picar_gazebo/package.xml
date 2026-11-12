@@ -3,7 +3,7 @@
 <package format="3">
   <name>picar_gazebo</name>
   <version>0.1.0</version>
-  <description>Gazebo Harmonic world, bridge config and launch file for the PiCar-B twin</description>
+  <description>Gazebo Harmonic world, bridge config, the twin's distance sensor node and launch file for the PiCar-B twin</description>
   <maintainer email="todo@example.com">ferin</maintainer>
   <license>Apache-2.0</license>
 
@@ -17,6 +17,11 @@
   <exec_depend>ros_gz_sim</exec_depend>
   <exec_depend>xacro</exec_depend>
   <exec_depend>picar_base</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>squad_gazebo</exec_depend>
+
+  <test_depend>ament_cmake_pytest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
