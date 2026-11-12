@@ -3,12 +3,9 @@
 Type a task here (or send one as text on /from_human) and the AI drives the
 car with the tools in picar_tools.py. Answers are printed and sent on /to_human.
 
-Which AI it uses is set in .env (see .env.example), no code changes needed:
-    PICAR_LLM       ollama (local, the default), openai (OpenAI or any server with an
-                    OpenAI-compatible API) or google (Gemini)
-    PICAR_MODEL     the model name; it must understand pictures and call tools
-    PICAR_BASE_URL  the server address, if it is not the default one
-    OPENAI_API_KEY / GOOGLE_API_KEY   the key for a cloud model
+Which AI and which car are set in .env (see .env.example), no code changes needed:
+    PICAR_LLM, PICAR_MODEL, PICAR_BASE_URL, PICAR_TEMPERATURE, the API keys: the model,
+                    see llm.py
     PICAR_CONFIG    which car: sim (the twin, the default), car (the real PiCar-B) or a
                     settings file (see car_config.py)
 """
@@ -31,7 +28,6 @@ except ImportError:   # without python-dotenv, export the settings in the shell 
 from langchain_core.callbacks import StreamingStdOutCallbackHandler
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langchain_ollama import ChatOllama
 from langgraph.errors import GraphRecursionError
 from rai.agents import BaseAgent
 from rai.agents.langchain import HRICallbackHandler, ReActAgentState, create_react_runnable
@@ -39,7 +35,7 @@ from rai.communication.ros2 import ROS2Connector, ROS2Context, ROS2HRIConnector,
 from rclpy.logging import get_logger
 
 from car_config import load_car
-from history import compress_history
+from llm import make_llm
 from picar_tools import make_picar_tools, save_memory
 from prompt import picar_prompt
 
@@ -53,53 +49,6 @@ warnings.filterwarnings("ignore", message="Calling .text")   # harmless RAI depr
 # Sent when the model stops without finishing (small models often announce a step and stop)
 NUDGE = ("You stopped before finishing. Continue now and call a tool, and look before you "
          "say what you see. If the task is finished, or cannot be done, answer starting with DONE.")
-
-
-class CompactHistory:
-    """Mixed into a chat model class: the model gets a compressed copy of the conversation."""
-
-    # run_manager must be named here: LangChain only streams the words to the
-    # callbacks when the method's signature has it.
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        return super()._generate(compress_history(messages), stop, run_manager, **kwargs)
-
-    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
-        return super()._stream(compress_history(messages), stop, run_manager, **kwargs)
-
-
-class CompactChatOllama(CompactHistory, ChatOllama):
-    pass
-
-
-def make_llm():
-    """The chat model chosen in .env. Returns the model and a short description."""
-    provider = os.environ.get("PICAR_LLM", "ollama").strip().lower()
-    model = os.environ.get("PICAR_MODEL", "").strip()
-    base_url = os.environ.get("PICAR_BASE_URL", "").strip() or None
-    if provider not in ("ollama", "openai", "google"):
-        raise ValueError(f"PICAR_LLM must be ollama, openai or google, not '{provider}'")
-    if provider != "ollama" and not model:
-        raise ValueError(f"Set PICAR_MODEL in .env: the {provider} model to use")
-
-    if provider == "ollama":
-        model = model or "qwen3-vl:4b-instruct"
-        # compress_history keeps each request well under num_ctx
-        llm = CompactChatOllama(model=model, base_url=base_url, num_ctx=8192, temperature=0.2)
-    elif provider == "openai":   # the key comes from OPENAI_API_KEY
-        from langchain_openai import ChatOpenAI
-
-        class CompactChatOpenAI(CompactHistory, ChatOpenAI):
-            pass
-
-        llm = CompactChatOpenAI(model=model, base_url=base_url, temperature=0.2)
-    elif provider == "google":   # the key comes from GOOGLE_API_KEY
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
-        class CompactGemini(CompactHistory, ChatGoogleGenerativeAI):
-            pass
-
-        llm = CompactGemini(model=model, temperature=0.2)
-    return llm, f"{provider}, {model}" + (f" at {base_url}" if base_url else "")
 
 
 class PicarAgent(BaseAgent):

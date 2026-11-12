@@ -9,7 +9,8 @@ the real car through the same ROS 2 names.
 
 | File | What it does |
 |---|---|
-| `agent.py` | The AI connection and the loop: model, conversation, your input and its answers |
+| `agent.py` | The loop: the conversation, your input and its answers |
+| `llm.py` | The AI model chosen in `.env` (Ollama, OpenAI or Gemini) |
 | `picar_tools.py` | The tools: drive, turn, look, look_around, approach, reached, remember |
 | `car_client.py` | Talks to the car: picar_base's moves and camera head, the distance sensor |
 | `camera.py` | Gets the camera's newest picture (never an old one) and turns it into the model's picture |
@@ -40,7 +41,8 @@ nano .env
 |---|---|
 | `PICAR_LLM` | `ollama` (local, the default), `openai` (OpenAI or any OpenAI-compatible server) or `google` (Gemini) |
 | `PICAR_MODEL` | The model name. Empty means `qwen3-vl:4b-instruct` for Ollama |
-| `PICAR_BASE_URL` | The server address, if it is not the default |
+| `PICAR_BASE_URL` | The server address, if it is not the default (Ollama, OpenAI) |
+| `PICAR_TEMPERATURE` | How much the answers vary, 0 to 2. Empty means 0.2 |
 | `OPENAI_API_KEY`, `GOOGLE_API_KEY` | The key for a cloud model |
 | `PICAR_CONFIG` | Which car: `sim` (the Gazebo twin, the default), `car` (the real PiCar-B: set it on the Pi) or the path of a settings file |
 
@@ -99,7 +101,8 @@ per move, speed limit), so the AI cannot drive the car into a wall.
 
 ## Change things
 
-- Another AI: only `.env`, or `make_llm()` in `agent.py` for another kind of service
+- Another AI: only `.env`, or `llm.py` for another kind of service (one `..._model()`
+  function, added to `MAKERS`)
 - The car's numbers: the settings file `PICAR_CONFIG` names. The speed, the limits and
   the stop distance come from its `picar_base` section, so the agent and picar_base
   always agree; the size, the turning, the camera and the floor distances from its
