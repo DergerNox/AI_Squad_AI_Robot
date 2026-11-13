@@ -13,7 +13,7 @@ mkdir -p ~/picar_ws/src
 cd ~/picar_ws/src
 
 # Klónozás közvetlenül a minirobot_bringup mappába:
-git clone -b Markus-Levente https://github.com/FELHASZNALO/REPO.git .
+git clone -b Markus-Levente https://github.com/DergerNox/AI_Squad_AI_Robot.git .
 
 # Telepítő futtatása (vagy csak a pip sor, ha a ROS 2 már fent van):
 chmod +x ~/picar_ws/src/minirobot_bringup/Downloads/telepito.sh
