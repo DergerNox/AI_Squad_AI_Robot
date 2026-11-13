@@ -1,8 +1,9 @@
 # Használati útmutató: a kód használata a Raspberry Pi-n
 
 Ez az útmutató azt írja le, hogyan kerül a repó kódja a Pi-re, hogyan kell
-lefordítani, elindítani és kipróbálni. Feltétel: a Pi-n Ubuntu 24.04 és
-ROS 2 Jazzy (`ros-jazzy-ros-base` és `ros-dev-tools`) van telepítve.
+lefordítani, elindítani és kipróbálni. Feltétel: a Pi-n Ubuntu 24.04 van. A ROS 2
+Jazzy-t a `setup_car.sh` telepíti, ha még nincs fent (1. pont). Az MI-ágens nem a Pi-n
+fut, hanem egy laptopon (7. pont).
 
 ## Néhány szó, ami előjön
 
@@ -21,6 +22,8 @@ ROS 2 Jazzy (`ros-jazzy-ros-base` és `ros-dev-tools`) van telepítve.
 - `picar/`: csak az Adeept PiCar-B-é: az autó modellje (`picar_description`) és a
   Pi-n futó node-ok (`picar_car`).
 - `pccar/`: a második autó (táblagép + ESP32). Egyelőre csak a leírása van meg.
+- A repó gyökerében két telepítő: `setup_car.sh` (egy autó gépe, 1. pont) és
+  `setup_laptop.sh` (a laptop, amelyen az MI-ágens fut, 7. pont).
 
 A csomagok neve nem változott, ezért a `colcon build`, `ros2 run` és `ros2 launch`
 parancsok ugyanazok. Csak a mappák helye más: az ágens például a
@@ -35,6 +38,25 @@ rm -rf build install log
 ```
 
 ## 1. A kód letöltése és fordítása (egyszer)
+
+A legegyszerűbb: a `setup_car.sh` mindent telepít és beállít, ami a Pi-nek kell (a ROS 2
+Jazzy-t, ha még nincs fent, a csomagokat, az SPI kikapcsolását, a csoportokat és a
+`~/.bashrc`-t). Ami már megvan, azt kihagyja, így bármikor újra lehet futtatni. Az ágens
+nem a Pi-n fut, ezért `--no-agent`:
+
+```bash
+sudo apt install -y git
+mkdir -p ~/picar_ws/src && cd ~/picar_ws/src
+git clone -b Ferenc_Csiszér https://github.com/DergerNox/AI_Squad_AI_Robot.git picar
+cd picar
+./setup_car.sh picar --no-agent
+```
+
+(A `-b Ferenc_Csiszér` addig kell, amíg ez a kód nincs a `main` ágban.) A végén kiírja,
+mi van még hátra (például újraindítás). Ha csak meg akarod nézni, mit csinálna:
+`./setup_car.sh picar --no-agent --dry-run`.
+
+Kézzel ugyanez:
 
 ```bash
 mkdir -p ~/picar_ws/src
@@ -183,42 +205,59 @@ A GitHubon a „Compare & pull request” gombbal kérhetitek, hogy a módosít�
 bekerüljön a `main` ágba. Jelszó helyett GitHub tokent kér
 (GitHub → Settings → Developer settings → Personal access tokens).
 
-## 7. Az MI-ágens futtatása a Pi-n
+## 7. Az MI-ágens a laptopon
 
-Egyszeri telepítés (sok csomagot tölt le, eltarthat egy ideig):
+Az MI-ágens (és ha helyben fut, a modell is) Ferenc laptopján fut, nem a Pi-n: a Pi 3B+
+memóriája kevés hozzá. A Pi csak az autó node-jait futtatja (3. pont). A laptop és a Pi
+ugyanazon a Wi-Fin van (a telefon hotspotján), és ROS 2-n beszélnek egymással.
 
-```bash
-sudo apt install ros-jazzy-rai-interfaces
-python3 -m venv ~/rai_venv --system-site-packages
-source ~/rai_venv/bin/activate
-pip install rai-core
-```
-
-Beállítás: hozd létre a `.env` fájlt a mintából, és írd bele, hol fut a modell:
+Telepítés a laptopon (Fedora), egyszer:
 
 ```bash
-cd ~/picar_ws/src/picar/shared/picar_agent
-cp .env.example .env
-nano .env
+sudo dnf install -y git
+mkdir -p ~/picar_ws/src && cd ~/picar_ws/src
+git clone -b Ferenc_Csiszér https://github.com/DergerNox/AI_Squad_AI_Robot.git picar
+cd picar
+./setup_laptop.sh
 ```
 
-- Ha a modell a PC-n fut (Ollama): `PICAR_BASE_URL=http://<a PC IP-címe>:11434`
-- Ha a felhőben fut: `PICAR_LLM`, `PICAR_MODEL` és a kulcs
+A `setup_laptop.sh`:
+- telepíti az Ollamát és a modellt (`qwen3-vl:4b-instruct`);
+- mivel a ROS 2 Jazzy csak Ubuntun fut, készít egy Ubuntu 24.04-es „dobozt” (distrobox,
+  neve `picar`), és abban telepíti a ROS-t és az ágenst;
+- a tűzfalon átengedi a ROS 2 forgalmát.
 
-Indítás. A Pi-n ne a `run.sh`-t használd, mert az a Gazebót is elindítja:
+Ha a gép eleve Ubuntu 24.04, elég ennyi: `./setup_car.sh laptop`.
+
+A modellt az ágens `.env` fájlja választja
+(`~/picar_ws/src/picar/shared/picar_agent/.env`):
+- alapból a laptop saját Ollamája;
+- felhő-modellhez: `./setup_laptop.sh --no-model`, és a `.env`-ben `PICAR_LLM`,
+  `PICAR_MODEL` és a kulcs;
+- ha a modell a PC-n fut (8. pont): `PICAR_BASE_URL=http://<a PC IP-címe>:11434`.
+
+Indítás, miután a Pi-n elindultak az autó node-jai (3. pont):
 
 ```bash
-source ~/rai_venv/bin/activate
-cd ~/picar_ws/src/picar/shared/picar_agent
-python3 agent.py
+picar-agent
 ```
 
-Az ágens csak akkor tud vezetni, ha az autó node-jai is futnak (3. pont). A `picar_base`
-hardveres része még nincs kész.
+Látja-e a laptop az autót:
+
+```bash
+distrobox enter picar
+ros2 topic list     # legyen benne a /camera/image_raw és az /ultrasonic/range
+```
+
+Még nincs kész:
+- a `picar_base` hardveres része;
+- a kamera képei most tömörítetlenül mennek (kb. 74 Mbit/s), ami a Pi Wi-Fijének túl
+  sok. Ehhez tömörített képek kellenek.
 
 ## 8. Ollama a PC-n (ha a modell a PC-n fut)
 
-A PC és a Pi legyen ugyanazon a hálózaton.
+Akkor kell, ha a modell nem a laptopon, hanem a PC-n fut. A PC és a laptop legyen
+ugyanazon a hálózaton.
 
 1. Telepítsd az Ollamát Windowsra: https://ollama.com/download/windows
 2. Töltsd le a modellt (PowerShellben): `ollama pull qwen3-vl:4b-instruct`
@@ -230,15 +269,15 @@ A PC és a Pi legyen ugyanazon a hálózaton.
    New-NetFirewallRule -DisplayName "Ollama" -Direction Inbound -Protocol TCP -LocalPort 11434 -Action Allow
    ```
 5. A PC IP-címe: `ipconfig`, az aktív hálózati kártya „IPv4 Address” sora.
-6. Próba a Pi-ről:
+6. Próba a laptopról:
    ```bash
    curl http://<a PC IP-címe>:11434/api/tags
    ```
-   Ha a válaszban szerepel a `qwen3-vl:4b-instruct`, a Pi eléri a modellt.
+   Ha a válaszban szerepel a `qwen3-vl:4b-instruct`, a laptop eléri a modellt.
 
 ## Ami még nem használható a Pi-n
 
 - `picar_base`: most csak a Gazebo-beli digitális ikert vezérli; a valódi autó hardveres része (motorok, kormány, kameratartó) még nincs megírva
 - `picar_gazebo`, `picar_description`: a digitális iker, csak a PC-n fut
 - `squad_gazebo` (a `sim` parancs): a digitális ikert és az MI-t indítja, csak a PC-n fut
-- `picar_agent`: az MI, egyelőre a PC-n fut
+- `picar_agent`: az MI nem a Pi-n fut, hanem a laptopon (7. pont), a digitális ikerrel a PC-n

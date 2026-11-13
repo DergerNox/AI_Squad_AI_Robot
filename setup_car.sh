@@ -4,6 +4,8 @@
 #
 #   ./setup_car.sh picar             the PiCar-B's Raspberry Pi (Ubuntu Server 24.04)
 #   ./setup_car.sh pccar             the PC car's Toughbook (Lubuntu 24.04)
+#   ./setup_car.sh laptop            the computer that runs the PiCar-B's AI agent (on Fedora,
+#                                    setup_laptop.sh runs this in an Ubuntu 24.04 distrobox)
 #   ./setup_car.sh picar --dry-run   only prints what it would do, changes nothing
 #   ./setup_car.sh pccar --no-agent  everything but the AI agent's Python environment
 #
@@ -20,6 +22,7 @@
 #               take the distance sensor's pins); the user in the GPIO/I2C/video groups
 #        pccar: v4l2_camera, adb and DroidCam with its DKMS video driver (the phone camera
 #               over USB); the user in the dialout (ESP32 serial) and video groups
+#        laptop: nothing more (the agent only needs ROS, its messages and the car's settings)
 #   4. builds this car's packages in the workspace
 #   5. the AI agent: ~/rai_venv from shared/picar_agent/requirements.txt, and its .env
 #   6. ~/.bashrc: ROS and the workspace in every new terminal
@@ -115,6 +118,7 @@ car_packages() {   # the packages to build for the car
     local extra=''
     case $CAR in
         picar) echo "picar_interfaces picar_base picar_listener picar_car" ;;
+        laptop) echo "picar_interfaces picar_base picar_car" ;;   # messages; car.yaml (needs picar_base)
         pccar)   # and whatever pccar/ holds by now (nothing built yet in 2026-11)
             if [ -d "$REPO/pccar" ]; then
                 extra=$(find "$REPO/pccar" -name package.xml -exec sed -n 's:.*<name>\(.*\)</name>.*:\1:p' {} \; | tr '\n' ' ')
@@ -142,8 +146,8 @@ check_system() {
         $FORCE || $DRY_RUN || fail "Ez nem Raspberry Pi: a 'picar' beállítás a PiCar-B Pi-jére való. (Ha mégis ezt akarod: --force)"
         warn "Ez nem Raspberry Pi."
     fi
-    if [ "$CAR" = pccar ] && is_raspberry_pi; then
-        $FORCE || $DRY_RUN || fail "Ez egy Raspberry Pi: a 'pccar' beállítás a PC-s autó gépére való. (Ha mégis ezt akarod: --force)"
+    if [ "$CAR" != picar ] && is_raspberry_pi; then
+        $FORCE || $DRY_RUN || fail "Ez egy Raspberry Pi: a '$CAR' beállítás nem a Pi-re való. (Ha mégis ezt akarod: --force)"
         warn "Ez egy Raspberry Pi."
     fi
 
@@ -154,7 +158,7 @@ check_system() {
    mkdir -p ~/picar_ws/src && cd ~/picar_ws/src
    git clone https://github.com/DergerNox/AI_Squad_AI_Robot.git picar"
     info "Repó: $REPO, workspace: $WS"
-    if [ "$CAR" = picar ] && [ ! -d "$REPO/picar/picar_car" ]; then
+    if [ "$CAR" != pccar ] && [ ! -d "$REPO/picar/picar_car" ]; then
         fail "Ebben a kódváltozatban nincs picar/picar_car. Frissítsd a kódot: cd $REPO && git pull"
     fi
     if ! $DRY_RUN; then
@@ -208,8 +212,10 @@ install_ros() {
     info "A rendszer frissítése, aztán a ROS 2 Jazzy (asztali felület és Gazebo nélkül). Ez eltarthat egy ideig."
     run $SUDO apt-get update
     run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
+    local for_agent=()
+    $AGENT && for_agent=(ros-jazzy-cv-bridge)   # RAI imports it (camera pictures); not in ros-base
     apt_install ros-jazzy-ros-base ros-dev-tools ros-jazzy-rai-interfaces \
-        python3-pytest python3-venv python3-pip git curl
+        python3-pytest python3-venv python3-pip git curl "${for_agent[@]}"
 }
 
 setup_picar() {
@@ -227,6 +233,11 @@ setup_pccar() {
     install_droidcam
     join_group dialout "az ESP32 soros portja (USB)"
     join_group video "a kamera"
+}
+
+setup_laptop() {
+    say "3. Az MI-ágens gépe"
+    info "Itt csak az ágens fut: a ROS-on, az üzeneteken és az autó beállításain kívül nem kell hozzá más."
 }
 
 install_droidcam() {
@@ -274,7 +285,7 @@ setup_agent() {
         info "A .env már megvan (a beállításaidat nem írom felül)."
     else
         run cp "$agent/.env.example" "$agent/.env"
-        if [ "$CAR" = picar ]; then
+        if [ "$CAR" != pccar ]; then
             run sed -i 's/^PICAR_CONFIG=$/PICAR_CONFIG=car/' "$agent/.env"
             info "PICAR_CONFIG=car beállítva: az ágens a valódi PiCar-B adataival dolgozik."
         fi
@@ -287,10 +298,13 @@ setup_bashrc() {
     if grep -Eqs '/opt/ros/[a-z]+/setup' "$bashrc" && grep -Ev '^\s*#' "$bashrc" | grep -Eo '/opt/ros/[a-z]+/' | grep -vq '/opt/ros/jazzy/'; then
         warn "A ~/.bashrc egy másik ROS-változatot is betölt: azt a sort töröld vagy tedd # mögé (csak a Jazzy kell)."
     fi
-    add_line_once "$bashrc" "source /opt/ros/jazzy/setup.bash" "/opt/ros/jazzy/setup.bash"
+    # Both lines check that ROS is there: on a Fedora laptop the same ~/.bashrc also runs
+    # outside the Ubuntu box, where there is no ROS.
+    local ros=/opt/ros/jazzy/setup.bash
+    add_line_once "$bashrc" "[ -f $ros ] && source $ros" "$ros"
     ws_setup="${WS/#$HOME/\~}/install/setup.bash"   # ~/picar_ws/install/setup.bash
     # the marker matches both ~/picar_ws/... and /home/<user>/picar_ws/...
-    add_line_once "$bashrc" "[ -f $ws_setup ] && source $ws_setup" "$(basename "$WS")/install/setup.bash"
+    add_line_once "$bashrc" "[ -f $ros ] && [ -f $ws_setup ] && source $ws_setup" "$(basename "$WS")/install/setup.bash"
 }
 
 summary() {
@@ -301,7 +315,11 @@ summary() {
         info "- Jelentkezz ki és be, vagy indítsd újra a gépet: az új csoportok csak utána érvényesek"
     fi
     info "- Nyiss egy új terminált: abban már megy a ROS és a kód."
-    if $AGENT; then
+    if [ "$CAR" = laptop ]; then
+        info "- A modell: a $REPO/shared/picar_agent/.env fájlban (alapból ennek a gépnek az Ollamája)."
+        info "- Az ágens indítása: picar-agent (ha a setup_laptop.sh telepítette), vagy:"
+        info "  cd $REPO/shared/picar_agent && source $VENV/bin/activate && python3 agent.py"
+    elif $AGENT; then
         info "- Írd be a $REPO/shared/picar_agent/.env fájlba, hol fut a modell (PICAR_BASE_URL, README 7-8. pont)."
     fi
     case $CAR in
@@ -310,17 +328,17 @@ summary() {
             info "- A telefonon: a DroidCam alkalmazás és az USB-hibakeresés (Fejlesztői beállítások)."
             info "- Próba: droidcam-cli adb 4747, egy másik terminálban: v4l2-ctl --list-devices" ;;
     esac
-    $DRY_RUN && info "(Ez csak kiírás volt: semmi nem változott.)"
+    if $DRY_RUN; then info "(Ez csak kiírás volt: semmi nem változott.)"; fi
 }
 
 usage() {
-    sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 main() {
     for arg in "$@"; do
         case $arg in
-            picar | pccar) CAR=$arg ;;
+            picar | pccar | laptop) CAR=$arg ;;
             --dry-run) DRY_RUN=true ;;
             --no-agent) AGENT=false ;;
             --force) FORCE=true ;;
@@ -332,8 +350,9 @@ main() {
         usage
         echo
         if is_raspberry_pi; then fail "Melyik autó? Ez egy Raspberry Pi, valószínűleg: ./setup_car.sh picar"; fi
-        fail "Melyik autó? ./setup_car.sh picar (a Pi-n) vagy ./setup_car.sh pccar (a PC-s autó gépén)"
+        fail "Melyik autó? ./setup_car.sh picar (a Pi-n), ./setup_car.sh pccar (a PC-s autó gépén) vagy ./setup_car.sh laptop (az ágens gépén)"
     fi
+    [ "$CAR" = laptop ] && ! $AGENT && fail "A laptopon épp az ágens a lényeg: ott ne használd a --no-agent-et."
     REPO=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
     if ! $DRY_RUN; then
         exec > >(tee -a "$LOG") 2>&1

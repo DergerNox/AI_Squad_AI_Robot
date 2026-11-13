@@ -22,7 +22,13 @@ the real car through the same ROS 2 names.
 
 ## What it needs
 
-- Ubuntu 24.04 with ROS 2 Jazzy and Gazebo Harmonic
+With the real car, the agent runs on a laptop on the car's Wi-Fi, not on the Pi (the Pi
+3B+ has too little memory): the Pi only runs the car's nodes. One command at the repo root
+installs everything below: `./setup_laptop.sh` on Fedora (it puts ROS and the agent in an
+Ubuntu 24.04 distrobox, and installs Ollama with the model), or `./setup_car.sh laptop`
+on Ubuntu 24.04.
+
+- Ubuntu 24.04 with ROS 2 Jazzy (and Gazebo Harmonic for the twin)
 - This repository cloned into `~/picar_ws/src/picar`, and the workspace built:
   `cd ~/picar_ws && colcon build --symlink-install`
 - RAI in a virtual environment `~/rai_venv`, made with `--system-site-packages`
@@ -44,7 +50,7 @@ nano .env
 | `PICAR_BASE_URL` | The server address, if it is not the default (Ollama, OpenAI) |
 | `PICAR_TEMPERATURE` | How much the answers vary, 0 to 2. Empty means 0.2 |
 | `OPENAI_API_KEY`, `GOOGLE_API_KEY` | The key for a cloud model |
-| `PICAR_CONFIG` | Which car: `sim` (the Gazebo twin, the default), `car` (the real PiCar-B: set it on the Pi) or the path of a settings file |
+| `PICAR_CONFIG` | Which car: `sim` (the Gazebo twin, the default), `car` (the real PiCar-B: the laptop setup sets it) or the path of a settings file |
 
 When the agent starts, it prints which model it uses and which car.
 
@@ -73,7 +79,9 @@ car picar
 ros2 topic echo /ultrasonic/range --field range
 ```
 
-On the real car (no twin), start the agent itself: `python3 agent.py` in this folder.
+With the real car, start the car's nodes on the Pi first, then the agent on the laptop:
+`picar-agent` (made by `setup_laptop.sh`), or `python3 agent.py` in this folder with ROS
+and `~/rai_venv` active. The laptop and the Pi must be on the same Wi-Fi.
 
 Tasks can also come from any ROS 2 program, and the answers go out on a topic:
 
