@@ -55,14 +55,14 @@ class PiCarAIAgent(Node):
 
         self.get_logger().info(f"[agent] Utasitas: '{prompt}' | Tavolsag: {self.current_distance:.2f} m")
 
-        forward_words = ["elore", "előre", "menj", "indulj", "lassan"]
-        if self.current_distance < 0.25 and any(w in prompt.lower() for w in forward_words) and "hatra" not in prompt.lower():
-            warn = f"Akadaly van elottem ({self.current_distance * 100:.0f} cm), nem mehetek elore! Fordulj el!"
-            self.get_logger().warn(f"[agent] {warn}")
-            rep = String()
-            rep.data = warn
-            self.reply_pub.publish(rep)
-            return
+        #forward_words = ["elore", "előre", "menj", "indulj", "lassan"]
+        #if self.current_distance < 0.25 and any(w in prompt.lower() for w in forward_words) and "hatra" not in prompt.lower():
+            #warn = f"Akadaly van elottem ({self.current_distance * 100:.0f} cm), nem mehetek elore! Fordulj el!"
+            #self.get_logger().warn(f"[agent] {warn}")
+            #rep = String()
+            #rep.data = warn
+            #self.reply_pub.publish(rep)
+            #return
 
         try:
             full_context = f"{prompt}\n[Ultrahangos elulso tavolsag: {self.current_distance:.2f} m]"
