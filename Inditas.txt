@@ -1,0 +1,65 @@
+=== 0. FIZIKAI ELŐKÉSZÜLETEK ===
+- Tápellátás: A Raspberry Pi-n kívül a Robot HAT panel főkapcsolóját is kapcsold be!
+- Hálózat: A Raspberry Pi csatlakozzon Wi-Fi-re / internetre.
+- Kábelezés:
+  * Ultrahang: D2 (Echo), D3 (Trig)
+  * Kormányszervó: P0
+  * Motorok: P12/D4 és P13/D5
+
+
+=== 1. LETÖLTÉS ÉS FORDÍTÁS (1. Terminálban) ===
+
+mkdir -p ~/picar_ws/src
+cd ~/picar_ws/src
+
+# Klónozás közvetlenül a minirobot_bringup mappába:
+git clone -b Markus-Levente https://github.com/FELHASZNALO/REPO.git .
+
+# Telepítő futtatása (vagy csak a pip sor, ha a ROS 2 már fent van):
+chmod +x ~/picar_ws/src/minirobot_bringup/Downloads/telepito.sh
+bash ~/picar_ws/src/minirobot_bringup/Downloads/telepito.sh
+# Gyors alternatíva: pip install --break-system-packages google-genai robot-hat numpy opencv-python
+
+# Fordítás:
+cd ~/picar_ws
+source /opt/ros/humble/setup.bash
+colcon build --packages-select minirobot_bringup
+source install/setup.bash
+
+
+=== 2. BRIDGE INDÍTÁSA (Maradj az 1. Terminálban!) ===
+
+cd ~/picar_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run minirobot_bringup picar_bridge
+# (Hagyd futni ezt az ablakot!)
+
+
+=== 3. GEMINI AGENT INDÍTÁSA (NYISS EGY 2. TERMINÁLT!) ===
+
+cd ~/picar_ws/src/minirobot_bringup
+source /opt/ros/humble/setup.bash
+source ~/picar_ws/install/setup.bash
+
+# Ide az AIzaSy... kezdetű Google AI Studio kulcsot írd:
+export GEMINI_API_KEY="AIzaSy..."
+python3 agent.py
+# (Hagyd futni ezt az ablakot is!)
+
+
+=== 4. IRÁNYÍTÁS ÉS TESZT (NYISS EGY 3. TERMINÁLT!) ===
+
+source /opt/ros/humble/setup.bash
+
+# 1. Előre
+ros2 topic pub --once /from_human std_msgs/msg/String "{data: 'Menj elore egy kicsit'}"
+
+# 2. Megállás
+ros2 topic pub --once /from_human std_msgs/msg/String "{data: 'Allj meg most'}"
+
+# 3. Kanyarodás balra
+ros2 topic pub --once /from_human std_msgs/msg/String "{data: 'Fordulj balra'}"
+
+# 4. Kanyarodás jobbra
+ros2 topic pub --once /from_human std_msgs/msg/String "{data: 'Kanyarodj jobbra'}"
