@@ -35,6 +35,10 @@ class PiCarBridge(Node):
         self.wheelbase = 0.14
         self.sim_distance = 1.5
 
+        # Akadalykikerulo allapotgep valtozoi
+        self.avoid_state = "IDLE"   # IDLE, BRAKE, REVERSE, TURN
+        self.avoid_timer = 0.0
+
         # Hardver komponensek
         self.sonar = None
         self.servo = None
@@ -100,6 +104,9 @@ class PiCarBridge(Node):
         cmd = msg.data.strip().upper()
         self.current_cmd = cmd
 
+        # Uj manualis parancs megszakitja az esetleges kikerulo manovert
+        self.avoid_state = "IDLE"
+
         if cmd == "ELORE":
             self.speed = 0.2
             self.steering_angle = 0.0
@@ -123,9 +130,63 @@ class PiCarBridge(Node):
         self.feedback_pub.publish(ack)
 
     def cmd_vel_callback(self, msg: Twist):
+        self.avoid_state = "IDLE"
         self.speed = msg.linear.x
         self.steering_angle = msg.angular.z
         self.apply_actuators()
+
+    def process_avoidance(self, dist: float):
+        """Nem-blokkolo autonom akadalykikerulo allapotgep (10 Hz-en fut)."""
+        now = time.monotonic()
+
+        if self.avoid_state == "IDLE":
+            # Ha elore haladunk es 18 cm ala er az akadaly, indul a kikerules
+            if dist < 0.18 and self.speed > 0:
+                self.get_logger().warn(f"[picar_bridge] AKADALY ({dist*100:.0f} cm)! Kikerulo manover inditasa...")
+                self.avoid_state = "BRAKE"
+                self.avoid_timer = now
+                self.speed = 0.0
+                self.steering_angle = 0.0
+                self.apply_actuators()
+
+        elif self.avoid_state == "BRAKE":
+            # 0.3 mp megallas, hogy ne rantsa le a fogaskerekeket az iranyvaltas
+            if now - self.avoid_timer >= 0.3:
+                self.avoid_state = "REVERSE"
+                self.avoid_timer = now
+                self.speed = -0.18
+                self.steering_angle = 0.0
+                self.apply_actuators()
+                self.get_logger().info("[picar_bridge] Kikerules 1/3: Tolatas...")
+
+        elif self.avoid_state == "REVERSE":
+            # 0.7 mp tolatas egyenes kormannyal
+            if now - self.avoid_timer >= 0.7:
+                self.avoid_state = "TURN"
+                self.avoid_timer = now
+                self.speed = 0.16
+                self.steering_angle = 0.45  # Balra kanyarodas (~26 fok)
+                self.apply_actuators()
+                self.get_logger().info("[picar_bridge] Kikerules 2/3: Elfordulas balra...")
+
+        elif self.avoid_state == "TURN":
+            # Ha kanyarodas kozben is nekimegy valaminek (< 14 cm), azonnal ujrakezdi
+            if dist < 0.14:
+                self.avoid_state = "BRAKE"
+                self.avoid_timer = now
+                self.speed = 0.0
+                self.apply_actuators()
+                return
+
+            # 0.9 mp kanyarodas utan kiegyenesit es halad tovabb az uj iranyba
+            if now - self.avoid_timer >= 0.9:
+                self.avoid_state = "IDLE"
+                self.speed = 0.2
+                self.steering_angle = 0.0
+                if not self.hardware:
+                    self.sim_distance = 1.5  # Szimulacioban uj szabad ut szimulalasa
+                self.apply_actuators()
+                self.get_logger().info("[picar_bridge] Kikerules 3/3: Ut szabad, haladas tovabb!")
 
     def read_ultrasonic(self):
         dist = 0.0
@@ -142,13 +203,11 @@ class PiCarBridge(Node):
             if self.speed > 0:
                 self.sim_distance = max(0.05, self.sim_distance - (self.speed * 0.1))
             elif self.speed < 0:
-                self.sim_distance = min(3.0, self.sim_distance + 0.02)
+                self.sim_distance = min(3.0, self.sim_distance + 0.04)
             dist = self.sim_distance
 
-        if dist < 0.18 and self.speed > 0:
-            self.get_logger().warn("[picar_bridge] TÚL KÖZELI AKADÁLY! Vészfék aktiválva.")
-            self.speed = 0.0
-            self.apply_actuators()
+        # Autonom kikerules futtatasa
+        self.process_avoidance(dist)
 
         dist_msg = Float32()
         dist_msg.data = float(dist)
