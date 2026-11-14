@@ -75,12 +75,14 @@ class CarClient:
 
     def take_picture(self):
         """A camera picture taken after the car and the camera head stopped moving."""
-        return as_picture(newest_frame(self.connector, self.still_since, self.clock))
+        return as_picture(newest_frame(self.connector, self.still_since, self.clock,
+                                       self.car.camera_topic))
 
     def require_camera(self):
         """Never drive blind: the camera must have sent a picture in the last second."""
         try:
-            newest_frame(self.connector, self.clock.time() - 1.0, self.clock)
+            newest_frame(self.connector, self.clock.time() - 1.0, self.clock,
+                         self.car.camera_topic)
         except CameraDown:
             raise CameraDown(f"The car did not move. {CAMERA_DOWN}") from None
 

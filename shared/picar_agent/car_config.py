@@ -52,6 +52,7 @@ class Car:
     camera_fov_deg: float     # how wide the picture is
     floor: tuple              # (row, distance_m) pairs: see floor_rows in sim.yaml
     own_parts: str            # what the camera may see of the car itself
+    camera_topic: str = "/camera/image_raw"   # .../compressed: JPEGs (the real car, over Wi-Fi)
 
     @property
     def max_drive_m(self):
@@ -116,6 +117,7 @@ def load_car(spec=None, share=ros_share):
         camera_fov_deg=numbers["camera_fov_deg"],
         floor=tuple(zip(rows, distances)),
         own_parts=text(agent, "own_parts", path),
+        camera_topic=topic(agent, "camera_topic", path, Car.camera_topic),
     )
 
 
@@ -147,4 +149,13 @@ def text(params, name, path):
     value = params.get(name)
     if not value or not isinstance(value, str):
         raise CarConfigError(f"{path}: picar_agent needs {name}: a text")
+    return value.strip()
+
+
+def topic(params, name, path, default):
+    """An optional ROS topic name (default if missing)."""
+    value = params.get(name, default)
+    if not isinstance(value, str) or not value.startswith("/"):
+        raise CarConfigError(f"{path}: picar_agent's {name} must be a topic like {default}, "
+                             f"not {value!r}")
     return value.strip()

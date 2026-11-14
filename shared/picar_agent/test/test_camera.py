@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from camera import as_picture
+from camera import as_picture, message_type, newest_frame
 
 
 def ros_image(encoding, pixels, padding=0):
@@ -55,3 +55,56 @@ def test_an_encoding_it_cannot_read_says_what_to_set():
     image = SimpleNamespace(encoding="yuv422", height=1, width=2, step=4, data=bytes(4))
     with pytest.raises(ValueError, match="the camera sends yuv422 pictures.*format RGB888"):
         as_picture(image)
+
+
+# ---------- compressed pictures (the real car: /camera/image_raw/compressed) ----------
+
+def compressed(pixels, file_format):
+    """A sensor_msgs/CompressedImage stand-in: the picture saved as a JPEG or PNG file."""
+    out = io.BytesIO()
+    Image.fromarray(np.array(pixels, np.uint8)).save(out, file_format)
+    return SimpleNamespace(format=file_format.lower(), data=out.getvalue())
+
+
+def test_a_png_comes_out_exactly():
+    assert colours(as_picture(compressed([[RED, BLUE]], "PNG"))) == [[RED, BLUE]]
+
+
+def test_a_jpeg_comes_out_red_green_blue():
+    # left half red, right half blue; JPEG is lossy, so only close to the colours
+    pixels = [[RED] * 8 + [BLUE] * 8 for _ in range(16)]
+    out = colours(as_picture(compressed(pixels, "JPEG")))
+    assert (len(out), len(out[0])) == (16, 16)
+    for (r, g, b), want in ((out[8][2], RED), (out[8][13], BLUE)):
+        assert max(abs(r - want[0]), abs(g - want[1]), abs(b - want[2])) < 40
+
+
+def test_a_picture_that_cannot_be_decoded_says_what_to_check():
+    broken = SimpleNamespace(format="jpeg", data=b"not a picture")
+    with pytest.raises(ValueError, match="cannot be decoded: is the camera_topic"):
+        as_picture(broken)
+
+
+@pytest.mark.parametrize("topic, msg_type", [
+    ("/camera/image_raw", "sensor_msgs/msg/Image"),
+    ("/camera/image_raw/compressed", "sensor_msgs/msg/CompressedImage"),
+])
+def test_the_topic_decides_the_message_type(topic, msg_type):
+    assert message_type(topic) == msg_type
+
+
+class OneFrame:
+    """A connector stand-in with one frame; it writes down what it was asked for."""
+
+    def __init__(self):
+        self.asked = []
+
+    def receive_message(self, topic, timeout_sec, msg_type, qos_profile, auto_qos_matching):
+        self.asked.append((topic, msg_type))
+        return SimpleNamespace(timestamp=101.0, payload="the frame")
+
+
+def test_newest_frame_reads_the_cars_topic_with_its_type():
+    connector, clock = OneFrame(), SimpleNamespace(time=lambda: 100.0, sleep=lambda s: None)
+    assert newest_frame(connector, 100.0, clock, "/camera/image_raw/compressed") == "the frame"
+    assert connector.asked == [("/camera/image_raw/compressed", "sensor_msgs/msg/CompressedImage")]

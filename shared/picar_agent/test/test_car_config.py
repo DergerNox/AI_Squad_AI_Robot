@@ -48,7 +48,13 @@ def test_the_real_car_starts_with_the_twins_numbers():
     assert real.description == "an Adeept PiCar-B, a real car in a real room"
     different = {field.name for field in dataclasses.fields(twin)
                  if getattr(twin, field.name) != getattr(real, field.name)}
-    assert different == {"file", "description", "own_parts"}   # until it is measured
+    assert different == {"file", "description", "own_parts", "camera_topic"}   # until it is measured
+
+
+def test_the_real_car_sends_compressed_pictures_the_twin_raw_ones():
+    # raw pictures are about 74 Mbit/s: too much for the car's Wi-Fi
+    assert car_config.load_car(str(TWIN_FILE)).camera_topic == "/camera/image_raw"
+    assert car_config.load_car(str(REAL_FILE)).camera_topic == "/camera/image_raw/compressed"
 
 
 @pytest.mark.parametrize("path", [TWIN_FILE, REAL_FILE], ids=["sim.yaml", "car.yaml"])
@@ -109,6 +115,8 @@ def base(settings):
      "floor_rows and floor_distances_m need the same number of values"),
     (lambda s: agent(s).pop("floor_distances_m"), "needs floor_distances_m: a list of numbers"),
     (lambda s: agent(s).pop("description"), "picar_agent needs description: a text"),
+    (lambda s: agent(s).update(camera_topic="camera"),
+     "camera_topic must be a topic like /camera/image_raw, not 'camera'"),
 ])
 def test_mistakes_in_the_settings_say_what_to_fix(tmp_path, change, message):
     with pytest.raises(car_config.CarConfigError, match=message):

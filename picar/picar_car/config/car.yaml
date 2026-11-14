@@ -67,6 +67,9 @@ picar_base:
 picar_agent:
   ros__parameters:
     description: "an Adeept PiCar-B, a real car in a real room"   # what the AI is told it drives
+    # JPEGs from camera_ros (compressed-image-transport): about 9 Mbit/s over Wi-Fi instead
+    # of 74 for raw pictures. The twin leaves this out: raw /camera/image_raw.
+    camera_topic: "/camera/image_raw/compressed"
     length_m: 0.22
     width_m: 0.10
     turn_deg_per_m: 200.0     # measure: heading change per metre at full steering
