@@ -12,20 +12,22 @@
 # checks first and skips what is already done. Everything it prints also goes to
 # ~/setup_laptop.log. Its messages are in Hungarian, like setup_car.sh's.
 #
-# ROS 2 Jazzy runs only on Ubuntu 24.04, so ROS and the agent live in a distrobox: an
-# Ubuntu 24.04 container named 'picar' that shares your home folder and the network.
+# The car's Pi runs ROS 2 Humble (Ubuntu 22.04), and the agent's computer uses the same ROS
+# so that the two surely understand each other. Humble runs only on Ubuntu 22.04, so ROS
+# and the agent live in a distrobox: an Ubuntu 22.04 container named 'picar' that shares
+# your home folder and the network.
 # Steps:
 #   1. checks: Fedora, the repository in <workspace>/src/picar, free disk space
 #   2. Ollama as a user service, and the model qwen3-vl:4b-instruct. Only the program:
 #      Ollama's own installer would put NVIDIA's driver on Fedora
-#   3. distrobox and podman, and the 'picar' box (Ubuntu 24.04)
-#   4. in the box: ./setup_car.sh laptop (ROS 2 Jazzy, the agent's packages, ~/rai_venv,
+#   3. distrobox and podman, and the 'picar' box (Ubuntu 22.04)
+#   4. in the box: ./setup_car.sh laptop (ROS 2 Humble, the agent's packages, ~/rai_venv,
 #      the agent's .env)
 #   5. the picar-agent command (~/.local/bin): starts the agent in the box
 #   6. the firewall: lets ROS 2 (DDS, UDP 7400-7600, ROS_DOMAIN_ID 0) reach this laptop
 
 BOX=picar
-BOX_IMAGE=docker.io/library/ubuntu:24.04
+BOX_IMAGE=docker.io/library/ubuntu:22.04
 MODEL=qwen3-vl:4b-instruct
 OLLAMA_DOWNLOAD=https://ollama.com/download/ollama-linux-amd64.tar.zst
 OLLAMA_API=http://127.0.0.1:11434
@@ -104,10 +106,10 @@ agent_command() {   # the picar-agent script: starts the agent in the box
     cat << EOF
 #!/usr/bin/env bash
 # picar-agent: starts the PiCar-B's AI agent (made by setup_laptop.sh). It runs in the
-# '$BOX' distrobox (Ubuntu 24.04 with ROS 2 Jazzy), or right here if this is that box.
+# '$BOX' distrobox (Ubuntu 22.04 with ROS 2 Humble, like the car), or right here if this is that box.
 ws=$(printf %q "$WS")
 agent=$(printf %q "$REPO/shared/picar_agent")
-start="source /opt/ros/jazzy/setup.bash && source '\$ws/install/setup.bash' &&
+start="source /opt/ros/humble/setup.bash && source '\$ws/install/setup.bash' &&
     source ~/rai_venv/bin/activate && cd '\$agent' && exec python3 agent.py"
 if [ -n "\${CONTAINER_ID:-}" ]; then
     exec bash -c "\$start"
@@ -124,7 +126,7 @@ check_system() {
     # shellcheck disable=SC1090
     . "$OS_RELEASE"
     if [ "${ID:-}" != fedora ]; then
-        $FORCE || fail "Ez a Fedorára való (most: ${PRETTY_NAME:-ismeretlen}). Ubuntu 24.04-en elég ennyi: ./setup_car.sh laptop"
+        $FORCE || fail "Ez a Fedorára való (most: ${PRETTY_NAME:-ismeretlen}). Ubuntu 22.04-en elég ennyi: ./setup_car.sh laptop"
         warn "Ez nem Fedora: ${PRETTY_NAME:-ismeretlen}."
     fi
     info "Rendszer: $PRETTY_NAME, $(uname -m)"
@@ -208,7 +210,7 @@ ollama_service() {
 }
 
 make_box() {
-    say "3. Az Ubuntu 24.04 doboz ('$BOX', distrobox)"
+    say "3. Az Ubuntu 22.04 doboz ('$BOX', distrobox)"
     if command -v distrobox > /dev/null && command -v podman > /dev/null; then
         info "A distrobox és a podman már telepítve van."
     else
@@ -219,17 +221,17 @@ make_box() {
         image=$(podman inspect -f '{{.ImageName}}' "$BOX" 2> /dev/null)
         info "A '$BOX' doboz már megvan ($image)."
         case $image in
-            *ubuntu:24.04*) ;;
-            *) fail "A '$BOX' doboz nem Ubuntu 24.04. Töröld (distrobox rm $BOX), vagy nevezd át, aztán indítsd újra ezt." ;;
+            *ubuntu:22.04*) ;;
+            *) fail "A '$BOX' doboz nem Ubuntu 22.04 (az autó ROS-a, a Humble azon fut). Töröld (distrobox rm $BOX), vagy nevezd át, aztán indítsd újra ezt." ;;
         esac
     else
-        info "A doboz elkészítése: Ubuntu 24.04, a saját mappádat és a hálózatot közösen használja a Fedorával."
+        info "A doboz elkészítése: Ubuntu 22.04, a saját mappádat és a hálózatot közösen használja a Fedorával."
         run distrobox create --yes --name "$BOX" --image "$BOX_IMAGE"
     fi
 }
 
 setup_box() {
-    say "4. A dobozban: ROS 2 Jazzy, az ágens csomagjai és Python-környezete (./setup_car.sh laptop)"
+    say "4. A dobozban: ROS 2 Humble, az ágens csomagjai és Python-környezete (./setup_car.sh laptop)"
     info "Az első belépéskor a distrobox pár percig berendezi a dobozt; utána jön a setup_car.sh."
     local flags=''
     $DRY_RUN && flags=' --dry-run'

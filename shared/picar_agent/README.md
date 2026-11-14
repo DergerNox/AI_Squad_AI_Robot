@@ -25,10 +25,12 @@ the real car through the same ROS 2 names.
 With the real car, the agent runs on a laptop on the car's Wi-Fi, not on the Pi (the Pi
 3B+ has too little memory): the Pi only runs the car's nodes. One command at the repo root
 installs everything below: `./setup_laptop.sh` on Fedora (it puts ROS and the agent in an
-Ubuntu 24.04 distrobox, and installs Ollama with the model), or `./setup_car.sh laptop`
-on Ubuntu 24.04.
+Ubuntu 22.04 distrobox, and installs Ollama with the model), or `./setup_car.sh laptop`
+on Ubuntu 22.04. The laptop runs ROS 2 Humble like the car's Pi, so the two surely
+understand each other; the agent's code is the same with Humble and with Jazzy.
 
-- Ubuntu 24.04 with ROS 2 Jazzy (and Gazebo Harmonic for the twin)
+- Ubuntu 22.04 with ROS 2 Humble (with the real car), or Ubuntu 24.04 with ROS 2 Jazzy
+  and Gazebo Harmonic (the twin on the PC)
 - This repository cloned into `~/picar_ws/src/picar`, and the workspace built:
   `cd ~/picar_ws && colcon build --symlink-install`
 - RAI in a virtual environment `~/rai_venv`, made with `--system-site-packages`

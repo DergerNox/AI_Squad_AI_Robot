@@ -13,9 +13,13 @@ real hardware instead of Gazebo:
 
 ## Install (once)
 
+The repository's `setup_car.sh picar` does all of this. On the car (Ubuntu 22.04, ROS 2
+Humble) our code has its own workspace, `~/squad_ws`: the team's `~/picar_ws` stays theirs.
+
 ```bash
-sudo apt install python3-gpiozero python3-lgpio python3-rpi.gpio python3-smbus ros-$ROS_DISTRO-camera-ros
-cd ~/picar_ws
+sudo apt install python3-gpiozero python3-lgpio python3-rpi.gpio python3-smbus \
+    ros-$ROS_DISTRO-camera-ros ros-$ROS_DISTRO-compressed-image-transport
+cd ~/squad_ws
 colcon build --symlink-install --packages-select picar_interfaces picar_base picar_listener picar_car
 ```
 

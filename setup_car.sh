@@ -1,25 +1,30 @@
 #!/usr/bin/env bash
-# setup_car.sh: installs and sets up everything a car needs, on Ubuntu 24.04 (Lubuntu
-# 24.04 is the same system with another desktop).
+# setup_car.sh: installs and sets up everything a car needs, with ROS 2 Humble on Ubuntu
+# 22.04 or ROS 2 Jazzy on Ubuntu 24.04 (Lubuntu is the same system with another desktop).
 #
-#   ./setup_car.sh picar             the PiCar-B's Raspberry Pi (Ubuntu Server 24.04)
+#   ./setup_car.sh picar             the PiCar-B's Raspberry Pi (its Ubuntu 22.04 + Humble)
 #   ./setup_car.sh pccar             the PC car's Toughbook (Lubuntu 24.04)
 #   ./setup_car.sh laptop            the computer that runs the PiCar-B's AI agent (on Fedora,
-#                                    setup_laptop.sh runs this in an Ubuntu 24.04 distrobox)
+#                                    setup_laptop.sh runs this in an Ubuntu 22.04 distrobox)
 #   ./setup_car.sh picar --dry-run   only prints what it would do, changes nothing
 #   ./setup_car.sh pccar --no-agent  everything but the AI agent's Python environment
+#   ./setup_car.sh picar --agent     the agent on the Pi too (it normally runs on the laptop)
 #
-# Run it from the cloned repository (~/picar_ws/src/picar) as yourself, not as root: it
+# Run it from the cloned repository (<workspace>/src/picar) as yourself, not as root: it
 # asks for your password where it needs sudo. It can be run again any time: every step
 # checks first and skips what is already done. Everything it prints also goes to
 # ~/setup_car.log. Its messages are in Hungarian, for the hardware team.
+# On the PiCar the team's own workspace is ~/picar_ws: ours goes into its own, ~/squad_ws,
+# and the script refuses to build into a workspace that holds anything else.
 #
 # Steps:
-#   1. checks: Ubuntu 24.04, the repository in <workspace>/src/picar, the right computer
-#   2. ROS 2 Jazzy (ros-base: no desktop, no Gazebo) from ROS's apt repository
+#   1. checks: Ubuntu 22.04 or 24.04, the repository alone in <workspace>/src, the right computer
+#   2. ROS 2 (ros-base: no desktop, no Gazebo) from ROS's apt repository; where ROS is
+#      already installed, only the missing packages (no system upgrade)
 #   3. this car's system packages and settings
-#        picar: gpiozero + lgpio (distance sensor), camera_ros, i2c-tools; SPI off (it would
-#               take the distance sensor's pins); the user in the GPIO/I2C/video groups
+#        picar: gpiozero + lgpio (distance sensor), RPi.GPIO + smbus (motors, servos),
+#               camera_ros with compressed pictures, i2c-tools; SPI off (it would take the
+#               distance sensor's pins); the user in the GPIO/I2C/video groups
 #        pccar: v4l2_camera, adb and DroidCam with its DKMS video driver (the phone camera
 #               over USB); the user in the dialout (ESP32 serial) and video groups
 #        laptop: nothing more (the agent only needs ROS, its messages and the car's settings)
@@ -34,7 +39,8 @@ VENV=$HOME/rai_venv
 LOG=$HOME/setup_car.log
 SUDO=sudo   # the tests set it empty
 
-CAR='' DRY_RUN=false AGENT=true FORCE=false
+CAR='' DRY_RUN=false AGENT='' FORCE=false
+ROS='' CODENAME=''   # the ROS 2 version for this Ubuntu (ros_distro_for), and Ubuntu's code name
 REBOOT=false RELOGIN=false SWAPFILE=''
 
 # ---------- output ----------
@@ -65,6 +71,17 @@ apt_install() { run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y 
 # ---------- small, testable steps ----------
 
 is_raspberry_pi() { grep -qs "Raspberry Pi" /proc/device-tree/model; }
+
+ros_distro_for() {   # Ubuntu's code name -> the ROS 2 version made for it (empty: none)
+    case $1 in
+        jammy) echo humble ;;   # Ubuntu 22.04: the PiCar's Pi and the agent's laptop
+        noble) echo jazzy ;;    # Ubuntu 24.04: the PC with the twin, the PC car
+    esac
+}
+
+workspace_others() {   # src folder, our repo's folder name: what else is in the workspace
+    find "$1" -mindepth 1 -maxdepth 1 -type d ! -name "$2" ! -name '.*' -printf '%f ' | sed 's/ $//'
+}
 
 add_line_once() {   # file, line, text that shows the line is already there
     local file=$1 line=$2 marker=$3
@@ -134,13 +151,15 @@ check_system() {
     [ "$(id -u)" != 0 ] || fail "Ne root-ként (sudo-val) indítsd, hanem simán: ./setup_car.sh $CAR. Ahol kell, a jelszavadat kéri."
     # shellcheck disable=SC1091
     . /etc/os-release
-    [ "${VERSION_CODENAME:-}" = noble ] || fail "Ubuntu 24.04 kell hozzá (a Lubuntu 24.04 is jó), mert a ROS 2 Jazzy csak azon fut. Ezen a gépen: ${PRETTY_NAME:-ismeretlen}."
-    info "Rendszer: $PRETTY_NAME, $(uname -m)"
+    CODENAME=${VERSION_CODENAME:-}
+    ROS=$(ros_distro_for "$CODENAME")
+    [ -n "$ROS" ] || fail "Ubuntu 22.04 (ROS 2 Humble) vagy 24.04 (ROS 2 Jazzy) kell hozzá. Ezen a gépen: ${PRETTY_NAME:-ismeretlen}."
+    info "Rendszer: $PRETTY_NAME, $(uname -m); a hozzá való ROS 2: ${ROS^}"
     local others='' distro
     for distro in /opt/ros/*/; do
-        [ -d "$distro" ] && [ "$(basename "$distro")" != jazzy ] && others="$others$(basename "$distro") "
+        [ -d "$distro" ] && [ "$(basename "$distro")" != "$ROS" ] && others="$others$(basename "$distro") "
     done
-    [ -z "$others" ] || warn "Más ROS-változat is van a gépen ($others). A kód a Jazzyhoz készült; a ~/.bashrc csak a Jazzyt töltse be."
+    [ -z "$others" ] || warn "Más ROS-változat is van a gépen ($others). Ezen a gépen a ${ROS^} kell; a ~/.bashrc csak azt töltse be."
 
     if [ "$CAR" = picar ] && ! is_raspberry_pi; then
         $FORCE || $DRY_RUN || fail "Ez nem Raspberry Pi: a 'picar' beállítás a PiCar-B Pi-jére való. (Ha mégis ezt akarod: --force)"
@@ -158,6 +177,16 @@ check_system() {
    mkdir -p ~/picar_ws/src && cd ~/picar_ws/src
    git clone https://github.com/DergerNox/AI_Squad_AI_Robot.git picar"
     info "Repó: $REPO, workspace: $WS"
+    local foreign
+    foreign=$(workspace_others "$SRC" "$(basename "$REPO")")
+    if [ -n "$foreign" ]; then
+        [ "$CAR" = picar ] && ! $FORCE && fail "A $WS workspace-ben más is van ($foreign): ez valaki másé (a Pi-n a csapaté). A mi csomagjainkat külön workspace-be klónozd, hogy az övékhez ne nyúljunk:
+   mkdir -p ~/squad_ws/src && cd ~/squad_ws/src
+   git clone -b Ferenc_Csiszér https://github.com/DergerNox/AI_Squad_AI_Robot.git picar
+   cd picar && ./setup_car.sh picar
+(Ha mégis ide akarod: --force)"
+        warn "A workspace-ben más is van ($foreign): csak a mi csomagjainkat fordítom."
+    fi
     if [ "$CAR" != pccar ] && [ ! -d "$REPO/picar/picar_car" ]; then
         fail "Ebben a kódváltozatban nincs picar/picar_car. Frissítsd a kódot: cd $REPO && git pull"
     fi
@@ -187,7 +216,7 @@ remove_swap() {
 }
 
 install_ros() {
-    say "2. ROS 2 Jazzy"
+    say "2. ROS 2 ${ROS^}"
     if ! locale 2> /dev/null | grep -qi 'utf-8'; then
         info "UTF-8 nyelvi beállítás (a ROS ezt kéri)"
         apt_install locales
@@ -206,21 +235,26 @@ install_ros() {
         [ -n "$version" ] || version=$ROS_APT_SOURCE_FALLBACK
         info "A ROS apt-forrásának beállítása (ros2-apt-source $version)"
         run curl -fsSL -o /tmp/ros2-apt-source.deb \
-            "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${version}/ros2-apt-source_${version}.noble_all.deb"
+            "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${version}/ros2-apt-source_${version}.${CODENAME}_all.deb"
         run $SUDO dpkg -i /tmp/ros2-apt-source.deb
     fi
-    info "A rendszer frissítése, aztán a ROS 2 Jazzy (asztali felület és Gazebo nélkül). Ez eltarthat egy ideig."
     run $SUDO apt-get update
-    run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
+    if dpkg -s "ros-$ROS-ros-base" > /dev/null 2>&1; then
+        info "A ROS 2 ${ROS^} már fent van: a rendszert nem frissítem, csak a hiányzó csomagokat teszem fel."
+    else
+        info "A rendszer frissítése, aztán a ROS 2 ${ROS^} (asztali felület és Gazebo nélkül). Ez eltarthat egy ideig."
+        run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
+    fi
     local for_agent=()
-    $AGENT && for_agent=(ros-jazzy-cv-bridge)   # RAI imports it (camera pictures); not in ros-base
-    apt_install ros-jazzy-ros-base ros-dev-tools ros-jazzy-rai-interfaces \
+    $AGENT && for_agent=("ros-$ROS-cv-bridge")   # RAI imports it (camera pictures); not in ros-base
+    apt_install "ros-$ROS-ros-base" ros-dev-tools "ros-$ROS-rai-interfaces" \
         python3-pytest python3-venv python3-pip git curl "${for_agent[@]}"
 }
 
 setup_picar() {
     say "3. A PiCar-B csomagjai és beállításai"
-    apt_install python3-gpiozero python3-lgpio ros-jazzy-camera-ros i2c-tools
+    apt_install python3-gpiozero python3-lgpio python3-rpi.gpio python3-smbus i2c-tools \
+        "ros-$ROS-camera-ros" "ros-$ROS-compressed-image-transport"
     spi_off /boot/firmware/config.txt
     join_device_group /dev/gpiochip0 "a távolságérzékelő lábai"
     join_device_group /dev/i2c-1 "a szervóvezérlő (I2C)"
@@ -229,7 +263,7 @@ setup_picar() {
 
 setup_pccar() {
     say "3. A PC-s autó csomagjai és beállításai"
-    apt_install ros-jazzy-v4l2-camera v4l-utils adb dkms gcc make unzip "linux-headers-$(uname -r)"
+    apt_install "ros-$ROS-v4l2-camera" v4l-utils adb dkms gcc make unzip "linux-headers-$(uname -r)"
     install_droidcam
     join_group dialout "az ESP32 soros portja (USB)"
     join_group video "a kamera"
@@ -268,7 +302,7 @@ build_workspace() {
     info "Ennek az autónak a csomagjai: $packages"
     # a Pi 3B+ has 1 GB: one package and one compiler job at a time
     [ "$CAR" = picar ] && flags="$flags --executor sequential"
-    run bash -c "source /opt/ros/jazzy/setup.bash && cd '$WS' && MAKEFLAGS=-j1 colcon build $flags --packages-select $packages"
+    run bash -c "source /opt/ros/$ROS/setup.bash && cd '$WS' && MAKEFLAGS=-j1 colcon build $flags --packages-select $packages"
 }
 
 setup_agent() {
@@ -280,6 +314,7 @@ setup_agent() {
         run python3 -m venv "$VENV" --system-site-packages
     fi
     [ "$CAR" = picar ] && info "A Pi-n ez akár egy óráig is eltarthat (sok csomag, kevés memória)."
+    run "$VENV/bin/pip" install --upgrade pip   # Ubuntu 22.04's pip is from 2022
     run "$VENV/bin/pip" install -r "$agent/requirements.txt"
     if [ -f "$agent/.env" ]; then
         info "A .env már megvan (a beállításaidat nem írom felül)."
@@ -295,12 +330,12 @@ setup_agent() {
 setup_bashrc() {
     say "6. Minden új terminál ismerje a ROS-t és a kódot (~/.bashrc)"
     local bashrc=$HOME/.bashrc ws_setup
-    if grep -Eqs '/opt/ros/[a-z]+/setup' "$bashrc" && grep -Ev '^\s*#' "$bashrc" | grep -Eo '/opt/ros/[a-z]+/' | grep -vq '/opt/ros/jazzy/'; then
-        warn "A ~/.bashrc egy másik ROS-változatot is betölt: azt a sort töröld vagy tedd # mögé (csak a Jazzy kell)."
+    if grep -Eqs '/opt/ros/[a-z]+/setup' "$bashrc" && grep -Ev '^\s*#' "$bashrc" | grep -Eo '/opt/ros/[a-z]+/' | grep -vq "/opt/ros/$ROS/"; then
+        warn "A ~/.bashrc egy másik ROS-változatot is betölt: azt a sort töröld vagy tedd # mögé (csak a ${ROS^} kell)."
     fi
     # Both lines check that ROS is there: on a Fedora laptop the same ~/.bashrc also runs
     # outside the Ubuntu box, where there is no ROS.
-    local ros=/opt/ros/jazzy/setup.bash
+    local ros=/opt/ros/$ROS/setup.bash
     add_line_once "$bashrc" "[ -f $ros ] && source $ros" "$ros"
     ws_setup="${WS/#$HOME/\~}/install/setup.bash"   # ~/picar_ws/install/setup.bash
     # the marker matches both ~/picar_ws/... and /home/<user>/picar_ws/...
@@ -323,7 +358,9 @@ summary() {
         info "- Írd be a $REPO/shared/picar_agent/.env fájlba, hol fut a modell (PICAR_BASE_URL, README 7-8. pont)."
     fi
     case $CAR in
-        picar) info "- A távolságérzékelő próbája és az autó node-jai: README 3. pont." ;;
+        picar)
+            info "- A távolságérzékelő próbája és az autó node-jai: README 3. pont."
+            info "- A csapat picar_control node-jai (motor_steering_node, ultrasonic_node) ne fussanak a mieinkkel egyszerre: ugyanazokat a lábakat használják." ;;
         pccar)
             info "- A telefonon: a DroidCam alkalmazás és az USB-hibakeresés (Fejlesztői beállítások)."
             info "- Próba: droidcam-cli adb 4747, egy másik terminálban: v4l2-ctl --list-devices" ;;
@@ -332,7 +369,7 @@ summary() {
 }
 
 usage() {
-    sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 main() {
@@ -341,6 +378,7 @@ main() {
             picar | pccar | laptop) CAR=$arg ;;
             --dry-run) DRY_RUN=true ;;
             --no-agent) AGENT=false ;;
+            --agent) AGENT=true ;;
             --force) FORCE=true ;;
             -h | --help) usage; exit 0 ;;
             *) usage; echo; fail "Ismeretlen: '$arg'" ;;
@@ -351,6 +389,10 @@ main() {
         echo
         if is_raspberry_pi; then fail "Melyik autó? Ez egy Raspberry Pi, valószínűleg: ./setup_car.sh picar"; fi
         fail "Melyik autó? ./setup_car.sh picar (a Pi-n), ./setup_car.sh pccar (a PC-s autó gépén) vagy ./setup_car.sh laptop (az ágens gépén)"
+    fi
+    # the PiCar's agent runs on the laptop (the Pi 3B+ has too little memory), so not on the Pi
+    if [ -z "$AGENT" ]; then
+        if [ "$CAR" = picar ]; then AGENT=false; else AGENT=true; fi
     fi
     [ "$CAR" = laptop ] && ! $AGENT && fail "A laptopon épp az ágens a lényeg: ott ne használd a --no-agent-et."
     REPO=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
