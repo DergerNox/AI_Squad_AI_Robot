@@ -23,7 +23,7 @@ ultrasonic:                  # picar_car's distance sensor node (HC-SR04)
 
 picar_base:
   ros__parameters:
-    backend: hw              # picar_car.hw_backend: not written yet (see picar_base/backend.py)
+    backend: hw              # picar_car.hw_backend: Adeept's board (motors on GPIO, servos on a PCA9685)
     range_topics: ["/ultrasonic/range"]   # the distance sensors that guard the way ahead
     wheelbase_m: 0.145       # measure on the car
     full_speed_mps: 0.5      # measure: speed at full motor power
@@ -35,6 +35,30 @@ picar_base:
     range_timeout_s: 0.3
     max_pan_deg: 90.0
     max_tilt_deg: 40.0
+    # The hw backend (picar_car/hw_backend.py). The values are the team's, from
+    # picar_control/motor_steering_node.py, which drives this car. Decimals stay decimals.
+    # Servo values are PCA9685 steps (1/4096 of 20 ms; 300 is about 1.5 ms): lower values
+    # turn the steering and the camera left, and tilt the camera up.
+    hw:
+      motor_a_pins: [4, 14, 15]      # BCM: enable (PWM), forward, backward
+      motor_b_pins: [17, 27, 18]
+      motor_pwm_hz: 1000
+      min_duty_percent: 60.0         # the motors do not turn below this: power 0..1 -> 60..100 %
+      i2c_bus: 1
+      pca9685_address: 64            # 0x40
+      steering_channel: 2
+      steering_centre: 300
+      steering_full_left: 242        # at +max_steering_deg
+      steering_full_right: 350       # at -max_steering_deg
+      pan_channel: 6
+      pan_centre: 311
+      pan_per_deg: 2.2               # measure: steps per degree (negative turns the other way)
+      pan_limits: [180, 420]         # the team's safe range: about 60 deg left, 50 deg right
+      tilt_channel: 10
+      tilt_centre: 340
+      tilt_per_deg: 2.2
+      tilt_limits: [180, 430]        # about 70 deg up, 40 deg down
+      watchdog_s: 0.5                # no drive command for this long: the motors stop
 
 # What the AI knows about the car. The agent reads this file with PICAR_CONFIG=car (in its
 # .env on the Pi), plus picar_base's speed, limits and stop distance above. No ROS node uses

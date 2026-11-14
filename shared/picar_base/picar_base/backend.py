@@ -4,7 +4,7 @@ picar_base keeps the SafetyGate, the services and the timing; a backend only mov
 Each car has its own, in its own package, named by picar_base's `backend` parameter:
 
     sim     picar_base.sim_backend:SimBackend      the Gazebo twin
-    hw      picar_car.hw_backend:HwBackend         the real PiCar-B (not written yet)
+    hw      picar_car.hw_backend:HwBackend         the real PiCar-B (Adeept's board)
     esp32   pccar_car.esp32_backend:Esp32Backend   the PC car (not written yet)
 
 or any "package.module:ClassName". A new backend subclasses Backend:

@@ -21,7 +21,7 @@ from std_srvs.srv import SetBool, Trigger
 from rosgraph_msgs.msg import Clock
 
 from picar_base import base_node, safety
-from picar_base.backend import Backend, BackendError
+from picar_base.backend import NAMED_BACKENDS, Backend, BackendError
 from picar_base.base_node import PicarBase
 
 WHEELBASE_M = 0.145
@@ -162,9 +162,9 @@ def test_starts_stopped_with_the_camera_head_straight(base):
     assert [m.data for m in base.published["/sim/head_tilt"]] == [0.0]
 
 
-def test_the_hw_backend_is_not_there_yet(make_base):
-    with pytest.raises(Exception, match="hw"):
-        make_base(backend="hw")
+def test_hw_is_the_real_picars_backend():
+    # not loaded here: on the car it would open the real motors (picar_car tests it on fakes)
+    assert NAMED_BACKENDS["hw"] == "picar_car.hw_backend:HwBackend"
 
 
 # ---------- teleop (/cmd_vel) ----------
@@ -366,8 +366,8 @@ def test_sim_is_the_twins_backend(make_base):
 
 
 @pytest.mark.parametrize("name, message", [
-    ("hw", "backend 'hw': picar_car.hw_backend is not there"),
     ("esp32", "backend 'esp32': pccar_car.esp32_backend is not there"),
+    ("no_such_car.backend:Backend", "no_such_car.backend is not there"),
     ("warp", "use one of sim, hw, esp32 or package.module:ClassName"),
     ("picar_base.safety:SafetyGate", "picar_base.safety has no Backend class SafetyGate"),
 ])

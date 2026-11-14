@@ -2,7 +2,7 @@
 
 The node keeps the safety rules, the services and the timing. What it drives comes from a
 backend (backend.py), chosen by the `backend` parameter: sim drives the Gazebo twin
-(sim_backend.py), hw will drive the real PiCar-B and esp32 the PC car.
+(sim_backend.py), hw the real PiCar-B (picar_car/hw_backend.py), esp32 will drive the PC car.
 
 Interface (the same on every car):
   /cmd_vel           geometry_msgs/Twist     teleop; must keep arriving (cmd_timeout_s)
