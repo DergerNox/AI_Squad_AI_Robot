@@ -2,9 +2,13 @@
 
 Publishes /ultrasonic/range (sensor_msgs/Range) rate_hz times a second:
     a number   metres from the sensor to the nearest thing straight ahead
-    +inf       nothing within max_range_m
+    +inf       nothing within max_range_m: also when the sound does not come back at all,
+               which the sensor says with a long echo pulse (its own timeout: about 38 ms on
+               a genuine HC-SR04, 134 ms on the car's, measured 2026-11-14). Soft or thin
+               things (cloth, a chair leg) send no sound back either, so they count as
+               nothing too: the camera has to watch for them.
     -inf       closer than the sensor can measure (2 cm)
-    NaN        no echo came back: the reading failed
+    NaN        no echo pulse at all: the sensor or its wiring failed
 picar_base stops the car when something is too close, and also when no valid reading
 has arrived for 0.3 s. So every reading here is a fresh one: if the sensor or this
 node stops working, the car stops instead of driving on an old reading.
@@ -26,6 +30,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Range
 
 SPEED_OF_SOUND = 343.0   # m/s at about 20 degrees C
+ECHO_WAIT_S = 0.2        # longer than any echo pulse, the sensor's own timeout pulse included
 
 
 class HCSR04:
@@ -49,13 +54,18 @@ class HCSR04:
             self.done.set()
 
     def read(self):
-        """Metres to the nearest thing, or None if no echo came back."""
+        """Metres to the nearest thing (from a timeout pulse: far beyond any real echo), or
+        None if no echo pulse came or the last one never ended."""
+        if self.echo.is_active:         # still high from the last reading: a fault
+            return None
         self.rise = self.fall = None
         self.done.clear()
         self.trigger.on()               # a pulse of at least 10 microseconds starts a reading
         time.sleep(0.00001)
         self.trigger.off()
-        if not self.done.wait(0.06):    # the echo pulse is at most about 38 ms
+        # Until 2026-11-14 this waited 60 ms: the car's sensor sends 134 ms when nothing comes
+        # back, so every such reading became NaN and picar_base let the car drive nowhere.
+        if not self.done.wait(ECHO_WAIT_S):
             return None
         return self.ticks_diff(self.fall, self.rise) * SPEED_OF_SOUND / 2
 

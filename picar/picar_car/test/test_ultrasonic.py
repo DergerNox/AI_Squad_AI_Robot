@@ -80,6 +80,18 @@ def test_nothing_within_4_m_is_inf(sensor):
     assert values and all(value == math.inf for value in values)
 
 
+def test_the_sensors_own_no_echo_pulse_is_inf(sensor):
+    # nothing comes back: the car's HC-SR04 holds its echo pin high for 134 ms (a genuine
+    # one for about 38 ms); until 2026-11-14 the node gave up after 60 ms and sent NaN
+    sensor.trigger.echo_time = 0.134
+    try:
+        values = readings(sensor, 1.5)
+    finally:
+        sensor.trigger.echo_time = echo_time(1.0)
+        sensor.listen(0.5)   # let the last long pulse end before the next test
+    assert values and all(value == math.inf for value in values)
+
+
 def test_no_echo_is_nan(sensor):
     sensor.trigger.echo_pin = Device.pin_factory.pin(5)   # the echo misses the node's pin
     try:
