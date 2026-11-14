@@ -122,10 +122,18 @@ class FakeVision:
     def __init__(self):
         self.answers = []
         self.questions = []
+        self.name = ""   # the name for a sighting (NAME_IT); "": the colour asked about + " box"
 
     def invoke(self, messages, config=None):
-        self.questions.append(messages[0].content[0]["text"])
+        question = messages[0].content[0]["text"]
+        self.questions.append(question)
+        if question.startswith(NAME_IT_START):   # naming a sighting: not one of the answers
+            colour = question[len(NAME_IT_START):].split()[0]
+            return SimpleNamespace(content=self.name or f"{colour} box")
         return SimpleNamespace(content=self.answers.pop(0) if self.answers else "no")
+
+
+NAME_IT_START = picar_tools.NAME_IT.split("{thing}")[0]
 
 
 AGENT_MEMORY_FILE = picar_tools.MEMORY_FILE   # the real one, before the fixture below
@@ -303,6 +311,54 @@ def test_no_answer_from_picar_base(tools, car):
     car.results = [None]
     text = use(tools.drive, distance_m=0.5).content
     assert "picar_base did not answer." in text
+
+
+# ---------- no echo from the distance sensor ----------
+
+def test_a_second_move_without_a_distance_reading_explains_why(tools, car):
+    # on the real car a soft blanket gave no echo at all, and "just try again" kept the model trying
+    car.results = [("no_range", 0.0, 4.0), ("no_range", 0.0, 4.0)]
+    first = use(tools.drive, distance_m=0.3).content
+    second = use(tools.drive, distance_m=0.3).content
+    assert "just try again" in first
+    assert "The distance sensor gets no echo from what is in front" in second
+    assert "trying again does not help" in second
+
+
+def test_a_reading_in_between_starts_the_count_again(tools, car):
+    car.results = [("no_range", 0.0, 4.0), ("done", 1.0, 4.0), ("no_range", 0.0, 4.0)]
+    texts = [use(tools.drive, distance_m=0.3).content for _ in range(3)]
+    assert "just try again" in texts[2]
+
+
+def test_approach_lets_the_camera_judge_arrival_when_the_sensor_gets_no_echo(tools, car, vision):
+    car.results = [("no_range", 0.3, 4.0)]
+    vision.answers = ["middle", "yes"]
+    vision.name = "red stick"
+    text = use(tools.approach, target="red stick").content
+    assert "Is there a red stick right in front of the car" in vision.questions[-1]
+    assert "the camera shows the red stick right in front of the car" in text
+    assert "call reached now" in text
+    answer = use(tools.reached, target="red stick").content
+    assert answer.startswith("Noted: red stick (by the camera: the distance sensor could not see it).")
+
+
+def test_without_the_camera_close_up_no_echo_is_not_arrival(tools, car, vision):
+    car.results = [("no_range", 0.3, 4.0)]
+    vision.answers = ["middle", "no"]
+    vision.name = "red stick"
+    text = use(tools.approach, target="red stick").content
+    assert "Stopped early: the distance sensor had no fresh reading" in text
+    assert use(tools.reached, target="red stick").content.startswith("Not reached yet")
+
+
+def test_the_camera_arrival_is_forgotten_when_the_car_moves(tools, car, vision):
+    car.results = [("no_range", 0.3, 4.0)]
+    vision.answers = ["middle", "yes"]
+    vision.name = "red stick"
+    use(tools.approach, target="red stick")
+    use(tools.drive, distance_m=-0.3)
+    assert use(tools.reached, target="red stick").content.startswith("Not reached yet")
 
 
 # ---------- the emergency stop ----------
@@ -483,6 +539,30 @@ def test_look_around_without_a_real_target_describes_and_does_not_drive(tools, c
     assert ("ahead: a red stick on a blanket; to the left: a wooden wall; to the right: a plastic bag"
             in text)
     assert text.endswith("Do not drive: answer the user now, starting with DONE, with what you saw.")
+
+
+def test_look_around_does_not_take_something_else_of_the_colour(tools, car, vision):
+    # on the real car "Is there a blue box?" got "middle" for a blue bag; named, it was "blue bag"
+    vision.answers = ["middle"]
+    vision.name = "blue bag"
+    text = use(tools.look_around, target="blue box").content
+    assert "What is the blue thing at the middle of the picture?" in vision.questions[1]
+    assert text.startswith("Looked around for the blue box with the camera at pan 0, 45, -45, 90, -90: not seen.")
+
+
+@pytest.mark.parametrize("name", ["blue box", "a blue cube", "blue cardboard carton", "blue boxes"])
+def test_a_sighting_named_as_the_targets_kind_counts(tools, car, vision, name):
+    vision.answers = ["middle"]
+    vision.name = name
+    assert "seen with the camera at pan 0" in use(tools.look_around, target="blue box").content
+
+
+def test_approach_names_only_its_first_sighting(tools, car, vision):
+    car.range_m = 1.0
+    car.results = [("done", 1.0, 4.0), ("obstacle", 0.5, 0.2)]
+    vision.answers = ["middle", "middle", "yes, red box"]
+    use(tools.approach, target="red box")
+    assert sum(q.startswith(NAME_IT_START) for q in vision.questions) == 1
 
 
 def test_look_around_does_not_search_for_a_reached_target(tools, car, vision):

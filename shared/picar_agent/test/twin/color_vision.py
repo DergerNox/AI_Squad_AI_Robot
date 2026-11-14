@@ -6,6 +6,8 @@ tools drive, not how well a real model sees.
 import base64
 import io
 
+import re
+
 import numpy as np
 from PIL import Image
 
@@ -30,7 +32,13 @@ def mask_for(question, b64):
     return colour, COLOURS[colour](px[..., 0], px[..., 1], px[..., 2])
 
 
+TWIN_OBJECTS = {"red": "red box", "blue": "blue cylinder", "yellow": "yellow box"}
+
+
 def answer(question, b64):
+    named = re.search(r"What is the (\w+) thing", question)
+    if named:   # naming a sighting (picar_tools.NAME_IT; its examples name other colours)
+        return TWIN_OBJECTS.get(named.group(1), f"{named.group(1)} object")
     colour, mask = mask_for(question, b64)
     if mask is None:
         return "white wall"

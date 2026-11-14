@@ -72,6 +72,39 @@ def no_target(target):
     return re.sub(r"^(the|a|an|any)\s+", "", target.strip().lower()) in NO_TARGET
 
 
+# Asked to name a sighting. The model says "yes, there" to anything of the target's colour
+# (on the real car it took a blue bag for a blue box, 3 times out of 3), but names things
+# right ("blue bag", "red stick"; 2026-11-14), so a sighting counts only if named right.
+NAME_IT = ("This picture is from a small robot car's camera. What is the {thing} at the {where} of "
+           "the picture? Answer with two or three words, colour first, like 'red ball' or 'white wall'.")
+COLOUR_WORDS = {"red", "blue", "green", "yellow", "white", "black", "orange", "purple", "pink",
+                "brown", "grey", "gray"}
+KINDS = {   # what may stand for the target's kind in the model's name for it
+    "box": ("box", "cube", "carton", "crate", "package", "block"),
+    "stick": ("stick", "pole", "rod", "bar", "pipe"),
+    "cylinder": ("cylinder", "can", "tube", "pillar", "column"),
+    "ball": ("ball", "sphere"),
+}
+
+
+def names_target(answer, target):
+    """True if the model's name for a thing says it is the target's kind (box, stick, ...)."""
+    kind = target.split()[-1] if target.split() else ""
+    return any(word in answer for word in KINDS.get(kind, (kind,))) if kind else False
+
+
+# Told to the AI from the second move in a row without a distance reading. One is a passing
+# blip (the twin's sensor misses 2 % of echoes); several mean the sensor cannot see what is in
+# front: on the real car a soft blanket and a crumpled bag gave no echo at all (2026-11-14).
+NO_ECHO = ("The distance sensor gets no echo from what is in front: probably something soft "
+           "(cloth, foam, a crumpled bag) or a surface at an angle. The safety system does not let "
+           "the car drive forward without a reading, so trying again does not help: turn towards "
+           "something else, back up, or finish with DONE and tell the user.")
+# Asked when the sensor cannot see the target: is it close enough to count as arrived?
+CLOSE_UP = ("This picture is from a small robot car's camera, looking straight ahead. Is there a "
+            "{target} right in front of the car, so close that it reaches the bottom edge of the "
+            "picture? Answer only 'yes' or 'no'.")
+
 # Told to the AI when picar_base's emergency stop holds the car. Without "finish", the model
 # kept trying approach and backing up for minutes (first run on the real car, 2026-11-14).
 ESTOP = ("The emergency stop is on: the car cannot move at all until a person releases it. "
@@ -117,16 +150,19 @@ class TaskState:
     standing_at: str = ""     # the target it has just reached and still stands at
     tries: int = 0            # drives forward that did not move it
     doubted: bool = False     # reached was turned down once here because of the camera check
+    close_by_camera: str = ""  # the target the camera sees right in front while the sensor cannot
+    no_echo: int = 0          # moves in a row that ended without a distance reading
 
     def new_task(self):
         """Forget the last task: its targets and where the car stopped."""
         self.reached.clear()
         self.next_target = self.searched = ""
+        self.no_echo = 0
         self.leave_spot()
 
     def leave_spot(self):
         """The car has moved: whatever it was standing at is behind it now."""
-        self.blocked_m, self.seen, self.standing_at = None, "", ""
+        self.blocked_m, self.seen, self.standing_at, self.close_by_camera = None, "", "", ""
         self.tries, self.doubted = 0, False
 
     def target_now(self):
@@ -144,6 +180,9 @@ class TaskState:
         note = self.progress_note()
         if self.standing_at:
             note += f" You are still at the {self.standing_at}: back up and turn away from it."
+        elif self.close_by_camera:
+            note += (f" The camera shows the {self.close_by_camera} right in front of the car, which"
+                     f" the distance sensor cannot see: you have arrived, call reached now.")
         elif self.blocked_m is not None:
             target = f"the {self.target_now()}" if self.target_now() else "your target"
             note += " The car is stopped right in front of something and cannot drive forward."
@@ -194,9 +233,10 @@ def make_picar_tools(connector: ROS2Connector, vision=None, car=None, clock=None
                         "colour first, like 'green ball' or 'white wall'.")
         return ask_about(picture, question)
 
-    def where_is(picture, target, label):
+    def where_is(picture, target, label, confirm=True):
         """Where the vision model sees the target in a picture: "left", "middle",
-        "right", or "" if it is not there."""
+        "right", or "" if it is not there. confirm: the model must also name the thing
+        it sees as the target's kind (see NAME_IT)."""
         question = (f"Is there a {target} in this picture? Answer only 'no', or where it is "
                     "in the picture: 'left', 'middle' or 'right'.")
         words = re.findall(r"[a-z]+", ask_about(picture, question, label))
@@ -205,6 +245,12 @@ def make_picar_tools(connector: ROS2Connector, vision=None, car=None, clock=None
         where = next((w for w in ("left", "middle", "centre", "center", "right") if w in words), "")
         if where in ("centre", "center") or (not where and words[0] == "yes"):
             where = "middle"   # in the middle, or seen without saying where
+        if confirm:
+            first = target.split()[0] if target.split() else ""
+            thing = f"{first} thing" if first in COLOUR_WORDS else "object"
+            name = ask_about(picture, NAME_IT.format(thing=thing, where=where), f"{label}, named")
+            if not names_target(name, target):
+                return ""   # something else of the same colour
         return where
 
     def picture_with_notes(text):
@@ -227,6 +273,12 @@ def make_picar_tools(connector: ROS2Connector, vision=None, car=None, clock=None
             task.leave_spot()
         if answer is None:
             return driven, "picar_base did not answer.", False
+        if answer.reason == "no_range":
+            task.no_echo += 1
+            if task.no_echo >= 2:
+                return driven, NO_ECHO, False
+            return driven, f"Stopped early: {STOP_REASONS['no_range']}.", False
+        task.no_echo = 0
         if answer.reason == "obstacle":
             task.blocked_m = answer.min_range_m
             if not moved:
@@ -383,7 +435,8 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
                 picture = client.take_picture()
             except CameraDown:   # say how far it got before the camera stopped
                 return f"Approach to the {target}: {', '.join(steps) or 'did not move'}. {CAMERA_DOWN}", None
-            where = where_is(picture, target, "approach")
+            # named once, at the first sighting: after that it follows the same thing
+            where = where_is(picture, target, "approach", confirm=last in ("", "lost"))
             if not where:
                 if last in ("", "lost"):
                     break   # not in the picture, or still not after backing up
@@ -414,6 +467,19 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
             if stop:
                 break   # the safety stop, or another early stop
         moves = ", ".join(steps) if steps else "did not move"
+        if stop and task.no_echo and where == "middle":
+            # The distance sensor cannot see what is in front (something soft?), so the safety
+            # stop will never say "arrived": let the camera judge whether the target is right there.
+            try:
+                picture = client.take_picture()
+            except CameraDown:
+                return f"Approach to the {target}: {moves}. {stop} {CAMERA_DOWN}", None
+            close = ask_about(picture, CLOSE_UP.format(target=target), "close up")
+            if close.startswith("yes"):
+                task.close_by_camera = target
+                return (f"Approach to the {target}: {moves}. The distance sensor gets no echo here, "
+                        f"but the camera shows the {target} right in front of the car."
+                        + task.status_note()), picture
         if stop:
             text = f"Approach to the {target}: {moves}. {stop}"
         elif not where:
@@ -426,7 +492,8 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
     @tool
     def reached(target: str, next_target: str = ""):
         """Call this when the safety system has stopped the car right in front of one of
-        the targets the user asked for. The car's sensors check that it is really there.
+        the targets the user asked for, or when a tool says the camera shows it right in front.
+        The car's sensors check that it is really there.
 
         target: what you have reached, for example "red box".
         next_target: the next target the user asked for, or "" if none is left.
@@ -435,7 +502,17 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
         if target in task.reached:
             return (f"You already reached the {target}. Do not drive to it again: back up, "
                     f"then call look_around for the next target.{task.progress_note()}")
-        # Arrived means stopped right in front of it: the distance sensor decides, not a guess
+        # Arrived means stopped right in front of it: the distance sensor decides, not a guess.
+        # Only where the sensor gets no echo, the camera's close-up check in approach decides.
+        if task.close_by_camera and target == task.close_by_camera:
+            task.standing_at = target
+            task.reached.append(target)
+            task.next_target = next_target.strip().lower()
+            how = f"Noted: {target} (by the camera: the distance sensor could not see it)."
+            if not task.next_target:
+                return f"{how}{task.progress_note()} If that was the last target, finish with DONE."
+            return (f"{how}{task.progress_note()} Back up from the {target}, then call "
+                    f"look_around for the {task.next_target}.")
         if task.blocked_m is None:
             return (f"Not reached yet: the safety system has not stopped the car, so the {target} "
                     f"is not right in front of it. Call approach for the {target}: it drives until "
