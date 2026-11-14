@@ -54,9 +54,29 @@ APPROACH_BACK_M = 0.3     # how far to back up when the target slips out of the 
 STOP_REASONS = {
     "no_range": "the distance sensor had no fresh reading, just try again",
     "timeout": "the drive command arrived too late, just try again",
-    "estop": "the emergency stop is on",
     "busy": "another move was still running",
 }
+
+# look_around without a real target ("look around and tell me what you see"): the model
+# called look_around("unknown") and then drove at it (real car, 2026-11-14). It describes now.
+NO_TARGET = {"", "unknown", "anything", "something", "everything", "nothing", "object", "objects",
+             "thing", "things", "surroundings", "around", "room", "area", "environment", "scene",
+             "view", "what i see", "what you see"}
+DESCRIBE_PANS = ((0, "ahead"), (45, "to the left"), (-45, "to the right"))
+DESCRIBE = ("This picture is from a small robot car's camera. Describe it in one short sentence: "
+            "the main things you see and their colours.")
+
+
+def no_target(target):
+    """True if a look_around target names nothing to search for."""
+    return re.sub(r"^(the|a|an|any)\s+", "", target.strip().lower()) in NO_TARGET
+
+
+# Told to the AI when picar_base's emergency stop holds the car. Without "finish", the model
+# kept trying approach and backing up for minutes (first run on the real car, 2026-11-14).
+ESTOP = ("The emergency stop is on: the car cannot move at all until a person releases it. "
+         "Do not call drive, turn or approach again: finish with DONE and tell the user that "
+         "the emergency stop is on.")
 
 # Asked about the picture when the safety system has stopped the car
 IN_FRONT = ("This picture is from a small robot car's camera, looking straight ahead. "
@@ -148,8 +168,9 @@ def make_picar_tools(connector: ROS2Connector, vision=None, car=None, clock=None
     memory_file = memory_file or MEMORY_FILE
     memory = load_memory(memory_file)   # facts kept between tasks and restarts
 
-    def ask_about(picture, question, label="camera"):
-        """One short question to the vision model about a picture, without the chat."""
+    def ask_about(picture, question, label="camera", limit=60):
+        """One short question to the vision model about a picture, without the chat. The
+        answer comes back in lower case, at most limit characters."""
         if vision is None:
             return ""
         message = HumanMultimodalMessage(content=question, images=picture["images"])
@@ -159,7 +180,7 @@ def make_picar_tools(connector: ROS2Connector, vision=None, car=None, clock=None
         except Exception as error:
             print(f"\n[camera question failed: {error}]")
             return ""
-        answer = " ".join(str(answer).strip(" .'\"").lower().split())[:60]
+        answer = " ".join(str(answer).strip(" .'\"").lower().split())[:limit]
         print(f"\n[{label}: {answer}]")
         return answer
 
@@ -212,6 +233,8 @@ def make_picar_tools(connector: ROS2Connector, vision=None, car=None, clock=None
                 task.tries += 1
             stop = f"Safety stop: something is {answer.min_range_m:.2f} m in front of the bumper."
             return driven, stop, True
+        if answer.reason == "estop":
+            return driven, ESTOP, False
         if answer.reason != "done":
             return driven, f"Stopped early: {STOP_REASONS.get(answer.reason, answer.reason)}.", False
         return driven, "", False
@@ -248,6 +271,16 @@ pan_deg 0 and tilt_deg 0 look straight ahead.""")
         target: what you are looking for, for example "blue cylinder".
         """
         target = target.strip().lower()
+        if no_target(target):
+            seen = []
+            for pan, side in DESCRIBE_PANS:
+                client.point_camera(pan, 0)
+                answer = ask_about(client.take_picture(), DESCRIBE, f"camera {side}", limit=160)
+                seen.append(f"{side}: {answer or 'nothing clear'}")
+            client.point_camera(0, 0)
+            text = ("No target was named, so the camera described what it sees: " + "; ".join(seen)
+                    + ". Do not drive: answer the user now, starting with DONE, with what you saw.")
+            return text, client.take_picture()
         if target in task.reached:
             return (f"You already reached the {target}. Do not look for it again: look for"
                     f" the next target.{task.status_note()}", client.take_picture())
@@ -317,7 +350,7 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
         # target ends up beside it. Like a three-point turn, do half of it forward.
         driven, stop, blocked = move(distance / 2 if big else distance, steering)
         rest = distance - abs(driven)
-        if (blocked or big) and rest >= MIN_MOVE_M:
+        if (blocked or big) and rest >= MIN_MOVE_M and stop != ESTOP:
             # Reversing with the steering the other way turns the same way
             back, stop, _ = move(-rest, -steering)
             turned = math.copysign((abs(driven) + abs(back)) * car.turn_deg_per_m, angle)

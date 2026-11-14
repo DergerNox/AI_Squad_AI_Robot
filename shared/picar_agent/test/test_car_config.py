@@ -155,6 +155,13 @@ def test_the_twins_prompt_has_its_numbers():
         assert part in prompt
 
 
+def test_the_prompt_says_how_to_just_look_and_to_stop_at_the_emergency_stop():
+    prompt = words(picar_prompt(car_config.load_car(str(TWIN_FILE))))
+    assert "If the user only asks what you see, or to look around without naming a target, do not drive" in prompt
+    assert "look_around is only for finding a target." in prompt
+    assert "If a tool says the emergency stop is on, stop at once: finish with DONE" in prompt
+
+
 def test_the_real_cars_prompt_does_not_mention_gazebo():
     prompt = picar_prompt(car_config.load_car(str(REAL_FILE)))
     assert "a real car in a real room" in prompt and "Gazebo" not in prompt

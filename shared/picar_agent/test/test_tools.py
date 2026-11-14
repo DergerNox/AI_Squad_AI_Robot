@@ -305,6 +305,32 @@ def test_no_answer_from_picar_base(tools, car):
     assert "picar_base did not answer." in text
 
 
+# ---------- the emergency stop ----------
+
+def test_the_emergency_stop_tells_the_ai_to_finish(tools, car):
+    # on the real car the model kept trying approach and backing up for minutes
+    car.results = [("estop", 0.0, 4.0)]
+    text = use(tools.drive, distance_m=0.5).content
+    assert text.startswith("Drove +0.00 m")
+    assert "The emergency stop is on: the car cannot move at all" in text
+    assert "finish with DONE and tell the user" in text
+
+
+def test_a_big_turn_does_not_try_the_reversing_half_at_the_emergency_stop(tools, car):
+    car.results = [("estop", 0.0, 4.0)]
+    text = use(tools.turn, angle_deg=90).content
+    assert len(car.moves) == 1
+    assert "finish with DONE" in text
+
+
+def test_approach_ends_at_the_emergency_stop(tools, car, vision):
+    car.results = [("estop", 0.0, 4.0)]
+    vision.answers = ["middle"]
+    text = use(tools.approach, target="red box").content
+    assert len(car.moves) == 1
+    assert text.startswith("Approach to the red box: drove 0.00 m. The emergency stop is on")
+
+
 # ---------- never blind ----------
 
 def test_drive_and_turn_do_not_move_without_new_pictures(tools, car):
@@ -444,6 +470,19 @@ def test_look_around_not_seen(tools, car, vision):
 def test_look_around_without_a_vision_model_sees_nothing(car):
     tools = make_tools(car, None)
     assert "not seen" in use(tools.look_around, target="red box").content
+
+
+@pytest.mark.parametrize("target", ["unknown", "", "Anything", "the surroundings"])
+def test_look_around_without_a_real_target_describes_and_does_not_drive(tools, car, vision, target):
+    # "look around and tell me what you see": the model called look_around("unknown")
+    vision.answers = ["A red stick on a blanket.", "a wooden wall", "a plastic bag"]
+    text = use(tools.look_around, target=target).content
+    assert car.looks == [(0.0, 0.0), (45.0, 0.0), (-45.0, 0.0), (0.0, 0.0)]
+    assert car.moves == []
+    assert vision.questions[0].startswith("This picture is from a small robot car's camera. Describe it")
+    assert ("ahead: a red stick on a blanket; to the left: a wooden wall; to the right: a plastic bag"
+            in text)
+    assert text.endswith("Do not drive: answer the user now, starting with DONE, with what you saw.")
 
 
 def test_look_around_does_not_search_for_a_reached_target(tools, car, vision):
