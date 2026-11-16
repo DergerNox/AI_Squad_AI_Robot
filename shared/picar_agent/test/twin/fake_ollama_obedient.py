@@ -95,4 +95,6 @@ class H(BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
-ThreadingHTTPServer(("127.0.0.1", 11434), H).serve_forever()
+# Ollama's own port, or FAKE_OLLAMA_PORT (with WSL in mirrored mode the Windows Ollama holds 11434:
+# then run this on e.g. 11435 and give the agent PICAR_BASE_URL=http://127.0.0.1:11435)
+ThreadingHTTPServer(("127.0.0.1", int(os.environ.get("FAKE_OLLAMA_PORT", "11434"))), H).serve_forever()

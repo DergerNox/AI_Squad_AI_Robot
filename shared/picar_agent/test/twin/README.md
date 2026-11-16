@@ -26,7 +26,9 @@ python3 test/twin/test_approach_tools.py .
 ```
 
 The whole agent, with the stand-in model instead of Ollama (stop the real one first,
-both use port 11434):
+both use port 11434; or put the stand-in on another port, as needed when WSL runs in mirrored
+mode and the Windows Ollama holds 11434: `FAKE_OLLAMA_PORT=11435` for the stand-in and
+`PICAR_BASE_URL=http://127.0.0.1:11435` for the agent):
 
 ```bash
 python3 test/twin/fake_ollama_obedient.py /tmp/requests.jsonl "red box,yellow box" &

@@ -47,7 +47,11 @@ def answer(question, b64):
         middle = mask[:, width // 3: 2 * width // 3]
         return f"yes, {colour} object" if middle.mean() > 0.08 else "no, white wall"
     if mask.sum() < 40:
-        return "no"
+        return "upper half" if "How far down" in question else "no"
+    if "How far down" in question:   # picar_tools.HOW_FAR: where the colour's lowest row is
+        low = (np.where(mask.any(axis=1))[0].max() + 1) / mask.shape[0]
+        return ("bottom edge" if low >= 0.97 else "lower third" if low >= 0.67 else
+                "middle" if low >= 0.45 else "upper half")
     cols = np.where(mask.any(axis=0))[0]
     centre = (cols.min() + cols.max()) / 2
     if centre < width / 3:

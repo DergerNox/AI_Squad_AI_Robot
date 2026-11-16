@@ -100,10 +100,37 @@ NO_ECHO = ("The distance sensor gets no echo from what is in front: probably som
            "(cloth, foam, a crumpled bag) or a surface at an angle. The safety system does not let "
            "the car drive forward without a reading, so trying again does not help: turn towards "
            "something else, back up, or finish with DONE and tell the user.")
-# Asked when the sensor cannot see the target: is it close enough to count as arrived?
-CLOSE_UP = ("This picture is from a small robot car's camera, looking straight ahead. Is there a "
-            "{target} right in front of the car, so close that it reaches the bottom edge of the "
-            "picture? Answer only 'yes' or 'no'.")
+# Asked at every straight step of approach: how close is the target, by the camera? The
+# HC-SR04 does not hear every target (a small box on the real car, 2026-11-14): with the
+# sensor alone a step drove 0.58 m, past the box and under the camera. The answer is turned
+# into a distance with the car's floor table (where an object touches the floor in the picture).
+HOW_FAR = ("This picture is from a small robot car's camera, looking straight ahead. How far down "
+           "the picture is the bottom of the {target}? Answer only one of: 'bottom edge', "
+           "'lower third', 'middle', 'upper half'.")
+HOW_FAR_ROWS = {"bottom": 1.0, "lower": 0.83}   # how far down the picture (1 = bottom edge)
+
+
+def floor_distance(floor, row):
+    """Metres from the bumper to where the floor shows at this row of the picture (row 1 is
+    the bottom edge), from the car's floor table; outside the table, its nearest end."""
+    points = sorted(floor, reverse=True)   # bottom edge first: closest first
+    if row >= points[0][0]:
+        return points[0][1]
+    for (row_a, dist_a), (row_b, dist_b) in zip(points, points[1:]):
+        if row >= row_b:
+            return dist_a + (dist_b - dist_a) * (row_a - row) / (row_a - row_b)
+    return points[-1][1]
+
+
+def how_far_word(answer):
+    """bottom, lower, middle, upper or "" from the model's answer to HOW_FAR."""
+    words = re.findall(r"[a-z]+", answer)
+    for key, names in (("bottom", ("bottom",)), ("lower", ("lower",)),
+                       ("middle", ("middle", "centre", "center")), ("upper", ("upper", "top"))):
+        if any(name in words for name in names):
+            return key
+    return ""
+
 
 # Told to the AI when picar_base's emergency stop holds the car. Without "finish", the model
 # kept trying approach and backing up for minutes (first run on the real car, 2026-11-14).
@@ -430,6 +457,19 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
         client.require_camera()
         client.look_ahead()
         steps, where, last, stop = [], "", "", ""
+        right_there = car.floor and floor_distance(car.floor, 1.0)   # the bottom edge, metres
+
+        def by_camera(picture):
+            """bottom, lower, middle, upper or "": how far down the picture the target reaches."""
+            return how_far_word(ask_about(picture, HOW_FAR.format(target=target), "how far"))
+
+        def arrived_by_camera(picture):
+            task.close_by_camera = target
+            moves = ", ".join(steps) if steps else "did not move"
+            return (f"Approach to the {target}: {moves}. The distance sensor does not hear the "
+                    f"{target}, but the camera shows it right in front of the car."
+                    + task.status_note()), picture
+
         for _ in range(APPROACH_MAX_STEPS):
             try:
                 picture = client.take_picture()
@@ -451,6 +491,14 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
                 ahead = client.range_ahead()
                 distance = (2 * APPROACH_MIN_M if ahead is None else
                             clamp(ahead - car.stop_distance_m + 0.05, APPROACH_MIN_M, car.max_drive_m))
+                # and never past where the camera sees the target
+                low = by_camera(picture)
+                hears_it = ahead is not None and ahead < car.max_drive_m
+                if low == "bottom" and not hears_it:
+                    return arrived_by_camera(picture)   # right in front, but the sensor is deaf to it
+                if low in HOW_FAR_ROWS and right_there:
+                    to_bottom = floor_distance(car.floor, HOW_FAR_ROWS[low]) - right_there
+                    distance = min(distance, max(APPROACH_MIN_M, to_bottom))
                 driven, stop, _ = move(distance, 0.0)
                 steps.append(f"drove {driven:.2f} m")
                 last = where
@@ -474,12 +522,8 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
                 picture = client.take_picture()
             except CameraDown:
                 return f"Approach to the {target}: {moves}. {stop} {CAMERA_DOWN}", None
-            close = ask_about(picture, CLOSE_UP.format(target=target), "close up")
-            if close.startswith("yes"):
-                task.close_by_camera = target
-                return (f"Approach to the {target}: {moves}. The distance sensor gets no echo here, "
-                        f"but the camera shows the {target} right in front of the car."
-                        + task.status_note()), picture
+            if by_camera(picture) == "bottom":
+                return arrived_by_camera(picture)
         if stop:
             text = f"Approach to the {target}: {moves}. {stop}"
         elif not where:

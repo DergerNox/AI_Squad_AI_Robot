@@ -123,6 +123,7 @@ class FakeVision:
         self.answers = []
         self.questions = []
         self.name = ""   # the name for a sighting (NAME_IT); "": the colour asked about + " box"
+        self.how_far = ["upper half"]   # answers to HOW_FAR, in order; the last one repeats
 
     def invoke(self, messages, config=None):
         question = messages[0].content[0]["text"]
@@ -130,10 +131,13 @@ class FakeVision:
         if question.startswith(NAME_IT_START):   # naming a sighting: not one of the answers
             colour = question[len(NAME_IT_START):].split()[0]
             return SimpleNamespace(content=self.name or f"{colour} box")
+        if question.startswith(HOW_FAR_START):   # how far down the picture: not one of the answers
+            return SimpleNamespace(content=self.how_far.pop(0) if len(self.how_far) > 1 else self.how_far[0])
         return SimpleNamespace(content=self.answers.pop(0) if self.answers else "no")
 
 
 NAME_IT_START = picar_tools.NAME_IT.split("{thing}")[0]
+HOW_FAR_START = picar_tools.HOW_FAR.split("{target}")[0]
 
 
 AGENT_MEMORY_FILE = picar_tools.MEMORY_FILE   # the real one, before the fixture below
@@ -333,11 +337,12 @@ def test_a_reading_in_between_starts_the_count_again(tools, car):
 
 def test_approach_lets_the_camera_judge_arrival_when_the_sensor_gets_no_echo(tools, car, vision):
     car.results = [("no_range", 0.3, 4.0)]
-    vision.answers = ["middle", "yes"]
+    vision.answers = ["middle"]
+    vision.how_far = ["middle", "bottom edge"]   # before the step, and after the stop
     vision.name = "red stick"
     text = use(tools.approach, target="red stick").content
-    assert "Is there a red stick right in front of the car" in vision.questions[-1]
-    assert "the camera shows the red stick right in front of the car" in text
+    assert "How far down the picture is the bottom of the red stick?" in vision.questions[-1]
+    assert "the camera shows it right in front of the car" in text
     assert "call reached now" in text
     answer = use(tools.reached, target="red stick").content
     assert answer.startswith("Noted: red stick (by the camera: the distance sensor could not see it).")
@@ -345,7 +350,8 @@ def test_approach_lets_the_camera_judge_arrival_when_the_sensor_gets_no_echo(too
 
 def test_without_the_camera_close_up_no_echo_is_not_arrival(tools, car, vision):
     car.results = [("no_range", 0.3, 4.0)]
-    vision.answers = ["middle", "no"]
+    vision.answers = ["middle"]
+    vision.how_far = ["middle", "lower third"]
     vision.name = "red stick"
     text = use(tools.approach, target="red stick").content
     assert "Stopped early: the distance sensor had no fresh reading" in text
@@ -354,11 +360,69 @@ def test_without_the_camera_close_up_no_echo_is_not_arrival(tools, car, vision):
 
 def test_the_camera_arrival_is_forgotten_when_the_car_moves(tools, car, vision):
     car.results = [("no_range", 0.3, 4.0)]
-    vision.answers = ["middle", "yes"]
+    vision.answers = ["middle"]
+    vision.how_far = ["middle", "bottom edge"]
     vision.name = "red stick"
     use(tools.approach, target="red stick")
     use(tools.drive, distance_m=-0.3)
     assert use(tools.reached, target="red stick").content.startswith("Not reached yet")
+
+
+# ---------- the camera distance during approach ----------
+
+def test_a_target_the_sensor_does_not_hear_counts_by_the_camera_without_driving_into_it(
+        tools, car, vision):
+    # the real car's sensor never heard a small blue box: approach drove 0.58 m past it
+    car.range_m = math.inf          # the sensor hears nothing ahead
+    vision.answers = ["middle"]
+    vision.how_far = ["bottom edge"]
+    text = use(tools.approach, target="blue box").content
+    assert car.moves == []
+    assert "The distance sensor does not hear the blue box, but the camera shows it right in front" in text
+    assert "call reached now" in text
+    assert use(tools.reached, target="blue box").content.startswith("Noted: blue box (by the camera")
+
+
+def test_a_target_the_sensor_hears_still_ends_with_the_safety_stop(tools, car, vision):
+    car.range_m = 0.30              # the sensor hears it: arrival stays the safety stop's
+    car.results = [("obstacle", 0.5, 0.24)]
+    vision.answers = ["middle", "yes, blue box"]
+    vision.how_far = ["bottom edge"]
+    text = use(tools.approach, target="blue box").content
+    assert len(car.moves) == 1
+    assert "Safety stop: something is 0.24 m in front of the bumper." in text
+    assert use(tools.reached, target="blue box").content.startswith("Noted: blue box.")
+
+
+def test_in_the_lower_third_of_the_picture_the_steps_are_short(tools, car, vision):
+    car.range_m = math.inf          # the sensor alone would allow the longest step (0.6 m)
+    vision.answers = ["middle", "middle"]
+    vision.how_far = ["lower third", "bottom edge"]
+    use(tools.approach, target="blue box")
+    step = picar_tools.floor_distance(TWIN.floor, 0.83) - 0.35   # to the bottom edge: about 0.2 m
+    assert car.moves == [move(1.0, 0.0, step / 0.2)]              # then arrived by the camera
+    assert step == pytest.approx(0.205)
+
+
+@pytest.mark.parametrize("answer", ["middle", "upper half", "", "i do not know"])
+def test_far_away_the_sensor_alone_sizes_the_step(tools, car, vision, answer):
+    car.range_m = 0.5
+    vision.answers = ["middle"]
+    vision.how_far = [answer]
+    use(tools.approach, target="blue box")
+    assert car.moves[0] == move(1.0, 0.0, (0.5 - 0.25 + 0.05) / 0.2)
+
+
+@pytest.mark.parametrize("row, metres", [(1.0, 0.35), (0.9, 0.45), (0.85, 0.525), (0.6, 1.9), (0.3, 1.9)])
+def test_the_floor_table_gives_the_distance_of_a_picture_row(row, metres):
+    assert picar_tools.floor_distance(TWIN.floor, row) == pytest.approx(metres)
+
+
+@pytest.mark.parametrize("answer, word", [
+    ("Bottom edge.", "bottom"), ("lower third", "lower"), ("in the middle", "middle"),
+    ("upper half", "upper"), ("at the top", "upper"), ("no", "")])
+def test_how_far_answers(answer, word):
+    assert picar_tools.how_far_word(answer.lower()) == word
 
 
 # ---------- the emergency stop ----------
