@@ -48,6 +48,13 @@ K_TURN_DEG = 60           # turns this big go half forward, half reversing, to s
 
 APPROACH_MAX_STEPS = 12   # steps per approach call
 APPROACH_MIN_M = 0.2      # shortest step straight at the target
+# Close to a target the sensor does not hear (a low box on the real car: its beam passed over
+# it and the car hit the box, 2026-11-16): steps this long at most, side corrections at half
+# the angle and only while reversing, so they swing the car away from the target, not into it.
+APPROACH_CLOSE_M = 0.1
+# The sensor hears the target if it reads at most this much further than the camera puts it
+# (the real car's sensor read 1.3 m, the cabinet behind the low box, with the box at the bumper)
+HEAR_MARGIN_M = 0.3
 APPROACH_BACK_M = 0.3     # how far to back up when the target slips out of the picture
 
 # What the safety system's stop reasons mean
@@ -457,6 +464,8 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
         client.require_camera()
         client.look_ahead()
         steps, where, last, stop = [], "", "", ""
+        close = False   # the camera has seen the target in the lower third or nearer
+        deaf = False    # at the last straight step the distance sensor did not hear the target
         right_there = car.floor and floor_distance(car.floor, 1.0)   # the bottom edge, metres
 
         def by_camera(picture):
@@ -485,7 +494,7 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
                 swing = {"left": -car.max_steering_deg / 2, "right": car.max_steering_deg / 2}.get(last, 0.0)
                 driven, stop, _ = move(-APPROACH_BACK_M, swing)
                 steps.append(f"lost it, backed up {abs(driven):.2f} m")
-                last = "lost"
+                last, close = "lost", False
             elif where == "middle":
                 # Straight at it, as far as the distance sensor says is free
                 ahead = client.range_ahead()
@@ -493,22 +502,32 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
                             clamp(ahead - car.stop_distance_m + 0.05, APPROACH_MIN_M, car.max_drive_m))
                 # and never past where the camera sees the target
                 low = by_camera(picture)
-                hears_it = ahead is not None and ahead < car.max_drive_m
+                seen_at = (floor_distance(car.floor, HOW_FAR_ROWS[low])
+                           if low in HOW_FAR_ROWS and right_there else None)
+                # the sensor hears the target if it reads about where the camera sees it
+                hears_it = ahead is not None and ahead < (
+                    seen_at + HEAR_MARGIN_M if seen_at is not None else car.max_drive_m)
                 if low == "bottom" and not hears_it:
                     return arrived_by_camera(picture)   # right in front, but the sensor is deaf to it
-                if low in HOW_FAR_ROWS and right_there:
-                    to_bottom = floor_distance(car.floor, HOW_FAR_ROWS[low]) - right_there
-                    distance = min(distance, max(APPROACH_MIN_M, to_bottom))
+                close, deaf = close or low in HOW_FAR_ROWS, not hears_it
+                if seen_at is not None:
+                    distance = min(distance, max(APPROACH_MIN_M, seen_at - right_there))
+                if close and deaf:   # only the camera judges how close: small steps
+                    distance = min(distance, APPROACH_CLOSE_M)
                 driven, stop, _ = move(distance, 0.0)
                 steps.append(f"drove {driven:.2f} m")
                 last = where
             else:
                 # On one side: turn towards it. If the last turn to this side did not bring it
                 # to the middle, it is close and to the side, so turn while reversing instead.
-                angle = SIDE_OFFSET_DEG if where == "left" else -SIDE_OFFSET_DEG
+                # Close to a target the sensor does not hear, always reverse, and turn half as
+                # much: a forward arc at full steering pushes the front into the target.
+                careful = close and deaf
+                offset = SIDE_OFFSET_DEG / 2 if careful else SIDE_OFFSET_DEG
+                angle = offset if where == "left" else -offset
                 arc = abs(angle) / car.turn_deg_per_m
                 steering = math.copysign(car.max_steering_deg, angle)
-                backward = last == where
+                backward = last == where or careful
                 driven, stop, _ = move(-arc, -steering) if backward else move(arc, steering)
                 steps.append(f"turned {where}" + (" reversing" if backward else ""))
                 last = where

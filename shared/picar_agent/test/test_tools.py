@@ -394,14 +394,54 @@ def test_a_target_the_sensor_hears_still_ends_with_the_safety_stop(tools, car, v
     assert use(tools.reached, target="blue box").content.startswith("Noted: blue box.")
 
 
-def test_in_the_lower_third_of_the_picture_the_steps_are_short(tools, car, vision):
+def test_close_to_a_target_the_sensor_does_not_hear_the_steps_are_10_cm(tools, car, vision):
+    # a low box on the real car: the sensor heard the cabinet behind it and the car hit the box
     car.range_m = math.inf          # the sensor alone would allow the longest step (0.6 m)
     vision.answers = ["middle", "middle"]
     vision.how_far = ["lower third", "bottom edge"]
     use(tools.approach, target="blue box")
+    assert car.moves == [move(1.0, 0.0, 0.1 / 0.2)]   # 10 cm, then arrived by the camera
+
+
+def test_in_the_lower_third_with_the_sensor_hearing_it_the_step_goes_to_the_bottom_edge(
+        tools, car, vision):
+    car.range_m = 0.5               # the sensor hears it: its step would be 0.3 m
+    vision.answers = ["middle"]
+    vision.how_far = ["lower third"]
+    use(tools.approach, target="blue box")
     step = picar_tools.floor_distance(TWIN.floor, 0.83) - 0.35   # to the bottom edge: about 0.2 m
-    assert car.moves == [move(1.0, 0.0, step / 0.2)]              # then arrived by the camera
+    assert car.moves[0] == move(1.0, 0.0, step / 0.2)
     assert step == pytest.approx(0.205)
+
+
+@pytest.mark.parametrize("reading, step", [
+    (1.3, 0.1),      # the real car: the cabinet behind a low box, far beyond where the camera sees it
+    (0.75, 0.205),   # the twin: the box itself, about where the camera sees it
+])
+def test_the_sensor_hears_the_target_if_it_reads_about_where_the_camera_sees_it(
+        tools, car, vision, reading, step):
+    car.range_m = reading
+    vision.answers = ["middle"]
+    vision.how_far = ["lower third"]
+    use(tools.approach, target="blue box")
+    assert car.moves[0]["duration_s"] == pytest.approx(step / 0.2, abs=0.01)
+
+
+def test_close_to_a_target_the_sensor_does_not_hear_side_corrections_reverse(tools, car, vision):
+    car.range_m = math.inf
+    vision.answers = ["middle", "left", "middle"]
+    vision.how_far = ["lower third", "bottom edge"]
+    use(tools.approach, target="blue box")
+    # 10 cm straight, then 10 degrees left while reversing (0.05 m at 200 deg/m), then arrived
+    assert car.moves == [move(1.0, 0.0, 0.5), move(-1.0, -30.0, 0.05 / 0.2)]
+
+
+def test_a_target_the_sensor_hears_gets_the_usual_side_correction(tools, car, vision):
+    car.range_m = 0.5
+    vision.answers = ["middle", "left"]
+    vision.how_far = ["lower third"]
+    use(tools.approach, target="blue box")
+    assert car.moves[1] == move(1.0, 30.0, 0.1 / 0.2)   # 20 degrees forward, as before
 
 
 @pytest.mark.parametrize("answer", ["middle", "upper half", "", "i do not know"])
