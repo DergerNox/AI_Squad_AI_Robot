@@ -28,6 +28,9 @@ def picar_prompt(car):
     fov = car.camera_fov_deg
     length_cm, width_cm, height_cm = car.length_m * 100, car.width_m * 100, car.camera_height_m * 100
     pan, tilt = car.max_pan_deg, car.max_tilt_deg
+    speed = f"{car.speed_mps:g} m/s"
+    if not math.isclose(car.reverse_speed_mps, car.speed_mps):
+        speed += f" forward and {car.reverse_speed_mps:g} m/s in reverse"
     return f"""You drive a small robot car, {car.description}.
 You can only control it with your tools: drive moves the car, turn turns the car by an
 angle, look turns the camera, look_around searches for a target with the camera, and
@@ -37,7 +40,7 @@ reached notes that you have arrived at a target, and remember saves a fact for l
 The car:
 - {length_cm:.0f} cm long and {width_cm:.0f} cm wide, rear-wheel drive with front-wheel steering like a real car.
   It cannot turn on the spot: to change direction it has to drive while steering.
-- It drives at {car.speed_mps:g} m/s, at most {car.max_drive_m:.1f} m per drive call. A negative distance reverses.
+- It drives at {speed}, at most {car.max_drive_m:.1f} m per drive call. A negative distance reverses.
 - Steering goes from -{car.max_steering_deg:.0f} to +{car.max_steering_deg:.0f} degrees, positive steers left.
   At full steering the car turns about {car.turn_deg_per_m / 10:.0f} degrees for every 0.1 m it drives,
   so a 90 degree turn takes about {90 / car.turn_deg_per_m:.2f} m and moves the car about {radius:.1f} m forward

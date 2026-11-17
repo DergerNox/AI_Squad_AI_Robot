@@ -374,7 +374,7 @@ def test_picar_base_drives_through_it_with_car_yaml(monkeypatch):
         node.on_range(Range(range=2.0))
         node.on_cmd_vel(Twist(linear=Vector3(x=0.1), angular=Vector3(z=0.3)))
         node.loop()
-        assert gpio.pwms[A_ENABLE].duty == pytest.approx(68.0)     # 0.2 of full power
+        assert gpio.pwms[A_ENABLE].duty == pytest.approx(20.0)     # 0.2 of full power: min_duty 0
         steering = math.degrees(math.atan(0.145 * 0.3 / 0.1))
         assert bus.servo(STEERING) == round(300 - 58 * steering / 30)
     finally:

@@ -19,6 +19,7 @@ from PIL import Image
 from rai.communication.ros2 import ROS2Message
 
 import camera
+import car_client
 import car_config
 import picar_tools
 
@@ -64,6 +65,9 @@ class FakeCar:
     (taken before the move), as it does when the next picture has not arrived yet.
 
     range_m: what the distance sensor reads.
+
+    moving: a move that drives changes the picture (a new shade of grey), as a car that
+    really moves does; False: the wheels do not turn (a loose motor cable).
     """
 
     def __init__(self, clock):
@@ -80,6 +84,7 @@ class FakeCar:
         self.last_frame = 0.0
         self.last_image = self.image
         self.range_m = math.inf
+        self.moving = True
 
     def receive_message(self, topic, **kwargs):
         if topic == "/ultrasonic/range":
@@ -95,7 +100,8 @@ class FakeCar:
         return ROS2Message(payload=self.last_image, timestamp=self.last_frame)
 
     def service_call(self, message, target, msg_type, **kwargs):
-        if self.next_image is not None:   # the head or the car moves: the camera sees something new
+        given = self.next_image is not None
+        if given:   # the head or the car moves: the camera sees something new
             self.image, self.next_image = self.next_image, None
         self.stale_now = self.stale_first
         request = message.payload
@@ -111,6 +117,9 @@ class FakeCar:
             return ROS2Message(payload=None)
         reason, part, closest = result
         self.clock.now += request["duration_s"] * part
+        if self.moving and part > 0 and not given:
+            shade = (len(self.moves) * 40) % 256
+            self.image = SimpleNamespace(height=2, width=2, encoding="rgb8", data=bytes([shade] * 12))
         return ROS2Message(payload=SimpleNamespace(
             completed=reason == "done", reason=reason, min_range_m=closest))
 
@@ -122,22 +131,37 @@ class FakeVision:
     def __init__(self):
         self.answers = []
         self.questions = []
-        self.name = ""   # the name for a sighting (NAME_IT); "": the colour asked about + " box"
-        self.how_far = ["upper half"]   # answers to HOW_FAR, in order; the last one repeats
+        self.name = ""   # the name for a sighting (NAME_IT); "": the colour asked about + " box";
+        #                  a list: names in order, the last one repeats
+        # Where exactly the target is (LOCATE): how far down the picture its box reaches, in
+        # words (WORD_ROWS), in order, the last one repeats; the box is in the middle; "none": not located.
+        self.how_far = ["upper half"]
 
     def invoke(self, messages, config=None):
         question = messages[0].content[0]["text"]
         self.questions.append(question)
         if question.startswith(NAME_IT_START):   # naming a sighting: not one of the answers
             colour = question[len(NAME_IT_START):].split()[0]
+            if isinstance(self.name, list):
+                return SimpleNamespace(content=self.name.pop(0) if len(self.name) > 1 else self.name[0])
             return SimpleNamespace(content=self.name or f"{colour} box")
-        if question.startswith(HOW_FAR_START):   # how far down the picture: not one of the answers
-            return SimpleNamespace(content=self.how_far.pop(0) if len(self.how_far) > 1 else self.how_far[0])
+        if question.startswith(LOCATE_START):   # where exactly: not one of the answers
+            word = self.how_far.pop(0) if len(self.how_far) > 1 else self.how_far[0]
+            if word == "none":
+                return SimpleNamespace(content="[]")
+            return SimpleNamespace(content=f"```json\n[{box_json('target', 0.4, 0.6, WORD_ROWS[word])}]\n```")
         return SimpleNamespace(content=self.answers.pop(0) if self.answers else "no")
 
 
 NAME_IT_START = picar_tools.NAME_IT.split("{thing}")[0]
-HOW_FAR_START = picar_tools.HOW_FAR.split("{target}")[0]
+LOCATE_START = picar_tools.LOCATE.split("{target}")[0]
+WORD_ROWS = {"bottom edge": 0.99, "lower third": 0.83, "middle": 0.55, "upper half": 0.4}
+
+
+def box_json(label, x1, x2, bottom):
+    """One bounding box as qwen3-vl writes it (0 to 1000 across and down)."""
+    return (f'{{"bbox_2d": [{round(x1 * 1000)}, {round((bottom - 0.15) * 1000)}, {round(x2 * 1000)}, '
+            f'{round(bottom * 1000)}], "label": "{label}"}}')
 
 
 AGENT_MEMORY_FILE = picar_tools.MEMORY_FILE   # the real one, before the fixture below
@@ -184,7 +208,7 @@ def use(tool, **args):
 
 
 def move(speed, steering_deg, duration_s):
-    return {"speed": speed, "steering_deg": steering_deg, "duration_s": pytest.approx(duration_s)}
+    return {"speed": pytest.approx(speed), "steering_deg": steering_deg, "duration_s": pytest.approx(duration_s)}
 
 
 def pixel(picture):
@@ -239,7 +263,8 @@ def test_approach_steps_stop_short_of_the_cars_stop_distance(car, vision):
 
 # ---------- drive ----------
 
-def test_drive_asks_picar_base_for_full_speed_for_the_right_time(tools, car):
+def test_drive_asks_picar_base_for_the_cars_power_for_the_right_time(tools, car):
+    # the twin drives at max_speed: speed 1.0, as /picar/move's speed is a fraction of it
     text = use(tools.drive, distance_m=0.5, steering_deg=10).content
     assert car.moves == [move(1.0, 10.0, 2.5)]   # 0.5 m at 0.2 m/s
     assert text.startswith("Drove +0.50 m with steering +10, the heading changed about +33 degrees")
@@ -249,6 +274,33 @@ def test_drive_backward(tools, car):
     text = use(tools.drive, distance_m=-0.3).content
     assert car.moves == [move(-1.0, 0.0, 1.5)]
     assert text.startswith("Drove -0.30 m")
+
+
+# The real car: slower in reverse (car.yaml forward_power 0.35, reverse_power 0.15)
+SLOW_REVERSE = dataclasses.replace(TWIN, power=0.35, speed_mps=0.175, reverse_power=0.15,
+                                   reverse_speed_mps=0.075)
+
+
+def test_drive_uses_the_cars_power_forward_and_in_reverse(car, vision):
+    tools = make_tools(car, vision, SLOW_REVERSE)
+    use(tools.drive, distance_m=0.35)
+    use(tools.drive, distance_m=-0.15)
+    assert car.moves == [move(0.875, 0.0, 2.0), move(-0.375, 0.0, 2.0)]   # of max_speed 0.4
+
+
+def test_a_long_slow_reverse_goes_in_parts_of_at_most_max_move_s(car, vision):
+    tools = make_tools(car, vision, SLOW_REVERSE)
+    text = use(tools.drive, distance_m=-0.3).content   # 4 s at 0.075 m/s; picar_base allows 3 s
+    assert car.moves == [move(-0.375, 0.0, 3.0), move(-0.375, 0.0, 1.0)]
+    assert text.startswith("Drove -0.30 m")
+
+
+def test_a_move_in_parts_ends_at_the_first_early_stop(car, vision):
+    tools = make_tools(car, vision, SLOW_REVERSE)
+    car.results = [("estop", 0.5, 4.0)]
+    text = use(tools.drive, distance_m=-0.3).content
+    assert len(car.moves) == 1
+    assert text.startswith("Drove -0.11 m") and "The emergency stop is on" in text   # 1.5 s at 0.075 m/s
 
 
 def test_drive_is_limited_to_0_6_m_and_30_degrees(tools, car):
@@ -291,7 +343,8 @@ def test_blocked_drive_says_it_did_not_move_and_asks_the_camera_once(tools, car,
     assert "cannot drive forward" in second and "You have tried" not in second
     third = use(tools.drive, distance_m=0.4).content
     assert "You have tried 2 times." in third
-    assert len(vision.questions) == 1   # the car has not moved since, so it is the same thing
+    checks = [q for q in vision.questions if q.startswith(picar_tools.IN_FRONT)]
+    assert len(checks) == 1   # the car has not moved since, so it is the same thing
 
 
 def test_the_camera_check_names_the_target_being_searched(tools, car, vision):
@@ -341,7 +394,7 @@ def test_approach_lets_the_camera_judge_arrival_when_the_sensor_gets_no_echo(too
     vision.how_far = ["middle", "bottom edge"]   # before the step, and after the stop
     vision.name = "red stick"
     text = use(tools.approach, target="red stick").content
-    assert "How far down the picture is the bottom of the red stick?" in vision.questions[-1]
+    assert vision.questions[-1].startswith("Locate the red stick in the image.")
     assert "the camera shows it right in front of the car" in text
     assert "call reached now" in text
     answer = use(tools.reached, target="red stick").content
@@ -458,11 +511,62 @@ def test_the_floor_table_gives_the_distance_of_a_picture_row(row, metres):
     assert picar_tools.floor_distance(TWIN.floor, row) == pytest.approx(metres)
 
 
-@pytest.mark.parametrize("answer, word", [
-    ("Bottom edge.", "bottom"), ("lower third", "lower"), ("in the middle", "middle"),
-    ("upper half", "upper"), ("at the top", "upper"), ("no", "")])
-def test_how_far_answers(answer, word):
-    assert picar_tools.how_far_word(answer.lower()) == word
+@pytest.mark.parametrize("answer, boxes", [
+    # the real qwen3-vl on the real car's picture (2026-11-17)
+    ('```json [ {"bbox_2d": [402, 519, 714, 655], "label": "blue box"} ] ```',
+     [("blue box", 0.402, 0.519, 0.714, 0.655)]),
+    ('[{"bbox_2d": [12, 597, 430, 754], "label": "White power strip"}, '
+     '{"bbox_2d": [500, 600, 450, 1200], "label": "x"}]',          # corners swapped, past the edge
+     [("white power strip", 0.012, 0.597, 0.43, 0.754), ("x", 0.45, 0.6, 0.5, 1.0)]),
+    ("There is no blue box in the image.", []),
+    ("[]", []),
+])
+def test_bounding_boxes_from_the_models_answer(answer, boxes):
+    assert picar_tools.boxes_in(answer) == [
+        (label, *(pytest.approx(v) for v in numbers)) for label, *numbers in boxes]
+
+
+# ---------- the car does not move, picar_base does not answer ----------
+
+def test_a_drive_that_does_not_change_the_picture_warns_then_says_to_stop(tools, car):
+    # 2026-11-17: a loose motor cable; approach "drove 0.49 m" twelve times, the car stood still
+    car.moving = False
+    first = use(tools.drive, distance_m=0.4).content
+    assert "The camera picture did not change, so the car may not have moved" in first
+    second = use(tools.drive, distance_m=0.4).content
+    assert "The car does not seem to move" in second and "finish with DONE" in second
+
+
+def test_a_drive_that_changes_the_picture_starts_the_count_again(tools, car):
+    car.moving = False
+    use(tools.drive, distance_m=0.4)
+    car.moving = True
+    assert "did not change" not in use(tools.drive, distance_m=0.4).content
+    car.moving = False
+    assert "does not seem to move" not in use(tools.drive, distance_m=0.4).content
+
+
+def test_approach_stops_when_its_steps_do_not_move_the_car(tools, car, vision):
+    car.moving = False
+    vision.answers = ["middle"] * 12
+    text = use(tools.approach, target="red box").content
+    assert len(car.moves) == 2
+    assert "The car does not seem to move" in text and "finish with DONE" in text
+
+
+def test_short_or_blocked_drives_are_not_checked(tools, car):
+    car.moving = False
+    assert "did not change" not in use(tools.drive, distance_m=0.05).content
+    car.results = [("obstacle", 0.0, 0.2)]
+    assert "did not change" not in use(tools.drive, distance_m=0.4).content
+
+
+def test_picar_base_not_answering_says_to_finish(tools, car):
+    def not_there(*args, **kwargs):
+        raise TimeoutError("Service /picar/look not ready within 5.0 seconds.")
+    car.service_call = not_there
+    with pytest.raises(car_client.BaseDown, match="picar_base on the car does not answer.*finish with DONE"):
+        use(tools.look, pan_deg=45)
 
 
 # ---------- the emergency stop ----------
@@ -524,16 +628,24 @@ def test_turn_right(tools, car):
     assert "the heading changed about -45 degrees" in text
 
 
-def test_a_big_turn_goes_half_forward_half_reversing(tools, car):
+def test_a_big_turn_drives_forward_all_the_way(tools, car):
+    # nothing sees behind the car: until 2026-11-17 it went half forward, half reversing
     text = use(tools.turn, angle_deg=90).content
-    # 0.45 m in all: half forward steering left, half reversing steering right
-    assert car.moves == [move(1.0, 30.0, 1.125), move(-1.0, -30.0, 1.125)]
-    assert text.startswith("Turned half forward, half reversing. The heading changed about +90 degrees")
+    assert car.moves == [move(1.0, 30.0, 2.25)]   # 0.45 m
+    assert text.startswith("Drove +0.45 m with steering +30, the heading changed about +90 degrees")
 
 
 def test_turn_is_limited_to_120_degrees(tools, car):
     use(tools.turn, angle_deg=180)
-    assert car.moves == [move(1.0, 30.0, 1.5), move(-1.0, -30.0, 1.5)]
+    assert car.moves == [move(1.0, 30.0, 3.0)]
+
+
+def test_a_turn_blocked_at_once_reverses_only_0_2_m(tools, car):
+    car.results = [("obstacle", 0.0, 0.2)]
+    text = use(tools.turn, angle_deg=120).content
+    assert car.moves == [move(1.0, 30.0, 3.0), move(-1.0, -30.0, 1.0)]   # 0.2 m of the 0.6 m
+    assert text.startswith("Blocked in front, so I turned a little more while reversing (0.2 m")
+    assert "The heading changed about +40 degrees" in text
 
 
 def test_blocked_turn_reverses_the_rest_with_the_steering_the_other_way(tools, car):
@@ -678,6 +790,27 @@ def test_look_around_does_not_search_for_a_reached_target(tools, car, vision):
     assert len(car.looks) == looks and len(vision.questions) == questions
 
 
+def test_look_around_asks_again_past_something_else_of_the_targets_colour(tools, car, vision):
+    # a blue backpack in front of the blue box: the model pointed at the backpack every time
+    vision.answers = ["left", "middle"]            # where is the blue box? / other than the backpack?
+    vision.name = ["blue backpack", "blue box"]
+    text = use(tools.look_around, target="blue box").content
+    assert "seen with the camera at pan 0, middle of the picture" in text
+    assert any("other than the blue backpack?" in q for q in vision.questions)
+
+
+def test_asking_again_that_points_at_the_same_place_is_not_a_sighting(tools, car, vision):
+    vision.answers = ["left", "left"] + ["no"] * 4
+    vision.name = ["blue backpack"]
+    assert "not seen" in use(tools.look_around, target="blue box").content
+
+
+@pytest.mark.parametrize("name, target", [("blue container", "blue box"), ("white sheet", "white bed"),
+                                          ("white mattress", "white bed")])
+def test_names_the_real_model_gave_the_targets(name, target):
+    assert picar_tools.names_target(name, target)
+
+
 # ---------- approach ----------
 
 @pytest.mark.parametrize("range_m, step_m", [
@@ -720,11 +853,41 @@ def test_approach_turns_towards_a_target_at_the_side_and_reverses_if_that_did_no
 
 def test_approach_backs_up_towards_a_target_it_lost(tools, car, vision):
     vision.answers = ["right", "no", "no"]
+    vision.how_far = ["none"]   # and the model cannot locate it either
     text = use(tools.approach, target="red box").content
     # lost after a turn right: back up with the front swinging right (steering left)
-    assert car.moves == [move(1.0, -30.0, 0.5), move(-1.0, 15.0, 1.5)]
+    # (0.2 m since 2026-11-17, was 0.3: nothing sees behind the car)
+    assert car.moves == [move(1.0, -30.0, 0.5), move(-1.0, 15.0, 1.0)]
     assert text == ("The red box is not in the picture straight ahead (turned right, lost it, "
-                    "backed up 0.30 m). Call look_around to find it. Reached so far: nothing yet.")
+                    "backed up 0.20 m). Call look_around to find it. Reached so far: nothing yet.")
+
+
+def test_close_up_the_target_is_located_before_it_is_given_up(tools, car, vision):
+    # the real car: after a drive at the blue box the model said "no blue box" (too close?)
+    car.results = [("done", 1.0, 4.0), ("obstacle", 0.5, 0.24)]
+    vision.answers = ["middle", "no", "yes, red box"]
+    vision.how_far = ["middle", "lower third"]   # the box, then located after the "no"
+    text = use(tools.approach, target="red box").content
+    assert all(m["speed"] > 0 for m in car.moves) and len(car.moves) == 2   # no backing up
+    assert "lost it" not in text and "Safety stop" in text
+
+
+def test_right_after_look_around_named_it_a_vague_name_will_do(tools, car, vision):
+    # close up, the real car's blue box became "blue object" and "blue wall" (2026-11-17)
+    car.results = [("obstacle", 0.5, 0.24)]
+    vision.answers = ["middle", "middle", "yes, blue box"]
+    vision.name = ["blue box", "blue object"]   # look_around's sighting, then approach's
+    use(tools.look_around, target="blue box")
+    use(tools.approach, target="blue box")
+    assert len(car.moves) == 1
+
+
+@pytest.mark.parametrize("first", ["approach", "look_around"])
+def test_without_a_sighting_just_before_a_vague_name_is_not_the_target(tools, car, vision, first):
+    vision.answers = ["left"]
+    vision.name = ["blue wall"]
+    text = use(getattr(tools, first), target="blue box").content
+    assert car.moves == [] and ("not in the picture" in text or "not seen" in text)
 
 
 def test_approach_without_the_target_in_the_picture_does_not_move(tools, car, vision):
@@ -766,7 +929,8 @@ def test_reached_counts_each_target_once_and_names_the_next(tools, car, vision):
     stop_in_front(tools, car, vision)
     text = use(tools.reached, target="Red box", next_target="yellow box").content
     assert text == ("Noted: red box. Reached so far: red box. Next target: yellow box. "
-                    "Back up from the red box, then call look_around for the yellow box.")
+                    "Back up 0.2 m from the red box (drive with distance_m -0.2), then call look_around "
+                    "for the yellow box.")
     again = use(tools.reached, target="red box").content
     assert again.startswith("You already reached the red box. Do not drive to it again")
 
@@ -792,7 +956,7 @@ def test_pictures_show_the_progress_until_the_car_moves_away(tools, car, vision)
     use(tools.reached, target="red box", next_target="yellow box")
     text = use(tools.look).content
     assert "Reached so far: red box. Next target: yellow box." in text
-    assert "You are still at the red box: back up and turn away from it." in text
+    assert "You are still at the red box: back up 0.2 m (drive with distance_m -0.2) and turn away" in text
     text = use(tools.drive, distance_m=-0.3).content
     assert "still at" not in text and "Reached so far: red box." in text
 

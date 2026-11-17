@@ -49,7 +49,9 @@ def newest_frame(connector, newer_than, clock=time, topic=CAMERA_TOPIC):
             message = connector.receive_message(
                 topic, timeout_sec=1.0, msg_type=message_type(topic),
                 qos_profile=qos_profile_sensor_data, auto_qos_matching=False)
-            if message.timestamp > newer_than:
+            data = getattr(message.payload, "data", None)
+            # an empty picture now and then (the real car's JPEGs, 2026-11-17): wait for the next
+            if message.timestamp > newer_than and (data is None or len(data) > 0):
                 return message.payload
         except TimeoutError:   # no frame at all yet
             pass

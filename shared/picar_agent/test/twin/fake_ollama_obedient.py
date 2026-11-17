@@ -12,7 +12,7 @@ from color_vision import answer  # noqa: E402
 
 LOG = sys.argv[1]
 TARGETS = sys.argv[2].split(",")
-state = {"i": 0, "after": None, "steps": 0}
+state = {"i": 0, "after": [], "steps": 0}   # after: the next calls to make
 
 
 def call(name, **args):
@@ -25,25 +25,24 @@ def decide(messages):
     target = TARGETS[state["i"]]
     nxt = TARGETS[state["i"] + 1] if state["i"] + 1 < len(TARGETS) else ""
     if "call reached now" in last:
-        state["after"] = None
+        state["after"] = []
         return call("reached", target=target, next_target=nxt)
     if state["after"]:
-        step, state["after"] = state["after"], None
-        return step
+        return state["after"].pop(0)
     if not tool_texts:
         return call("look_around", target=target)
     if "finish with DONE" in last:
         return {"content": "DONE All targets reached."}
-    if re.search(r"Back up from the .*?, then call look_around for the", last):
+    if re.search(r"Back up .*?from the .*?, then call look_around for the", last):
         state["i"] += 1
-        state["after"] = call("look_around", target=TARGETS[state["i"]])
-        return call("drive", distance_m=-0.3)
+        state["after"] = [call("look_around", target=TARGETS[state["i"]])]
+        return call("drive", distance_m=-0.2)
     turn = re.search(r"Call turn with angle_deg (-?\d+)", last)
     if turn:
-        state["after"] = call("approach", target=target)
+        state["after"] = [call("approach", target=target)]
         return call("turn", angle_deg=int(turn.group(1)))
     if "turn 120 and call look_around again" in last:
-        state["after"] = call("look_around", target=target)
+        state["after"] = [call("look_around", target=target)]
         return call("turn", angle_deg=120)
     if re.search(r"[Cc]all approach", last):
         return call("approach", target=target)

@@ -108,3 +108,19 @@ def test_newest_frame_reads_the_cars_topic_with_its_type():
     connector, clock = OneFrame(), SimpleNamespace(time=lambda: 100.0, sleep=lambda s: None)
     assert newest_frame(connector, 100.0, clock, "/camera/image_raw/compressed") == "the frame"
     assert connector.asked == [("/camera/image_raw/compressed", "sensor_msgs/msg/CompressedImage")]
+
+
+class EmptyThenGood:
+    """The real car's camera once sent an empty JPEG (2026-11-17): look failed in imdecode."""
+
+    def __init__(self):
+        self.frames = [SimpleNamespace(timestamp=101.0, payload=SimpleNamespace(format="jpeg", data=b"")),
+                       SimpleNamespace(timestamp=102.0, payload=SimpleNamespace(format="jpeg", data=b"jpeg"))]
+
+    def receive_message(self, topic, timeout_sec, msg_type, qos_profile, auto_qos_matching):
+        return self.frames.pop(0) if len(self.frames) > 1 else self.frames[0]
+
+
+def test_an_empty_picture_is_skipped():
+    clock = SimpleNamespace(time=lambda: 100.0, sleep=lambda s: None)
+    assert newest_frame(EmptyThenGood(), 100.0, clock, "/camera/image_raw/compressed").data == b"jpeg"

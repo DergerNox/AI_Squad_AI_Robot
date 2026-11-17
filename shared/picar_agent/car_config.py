@@ -8,7 +8,9 @@ in .env chooses it:
 
 From the file's picar_base section it takes the speed, the limits and the stop distance.
 Its picar_agent section holds what only the AI needs: how the car is described, its
-size, how sharply it turns, the camera, and how far away the floor is in the picture.
+size, how sharply it turns, the camera, and how far away the floor is in the picture,
+and the motor power it drives with forward and in reverse (both picar_base's max_speed
+when left out), with the speeds measured at those powers (else full_speed_mps x power).
 """
 
 import os
@@ -38,7 +40,11 @@ class CarConfigError(Exception):
 class Car:
     file: str                 # where these settings came from
     description: str          # "a simulated Adeept PiCar-B in a room in Gazebo"
-    speed_mps: float          # driving speed: full_speed_mps x max_speed
+    speed_mps: float          # driving speed forward: full_speed_mps x power
+    power: float              # motor power forward, a fraction of full power
+    reverse_speed_mps: float  # driving speed in reverse: full_speed_mps x reverse_power
+    reverse_power: float      # motor power in reverse (slower: the car cannot see behind it)
+    max_speed: float          # picar_base's power limit; /picar/move speeds are fractions of it
     max_move_s: float         # picar_base stops every move after this long
     max_steering_deg: float
     max_pan_deg: float
@@ -100,10 +106,22 @@ def load_car(spec=None, share=ros_share):
         raise CarConfigError(f"{path}: picar_agent's floor_rows and floor_distances_m "
                              f"need the same number of values ({len(rows)} and {len(distances)})")
 
+    full, most = numbers["full_speed_mps"], numbers["max_speed"]
+    power = optional_power(agent, "forward_power", most, path)
+    reverse_power = optional_power(agent, "reverse_power", most, path)
+    # Measured speeds win: the real car's motors do not turn below about 25 % duty, so speed is
+    # far from proportional to power (2026-11-17)
+    speed = optional_speed(agent, "forward_speed_mps", full * power, path)
+    reverse_speed = optional_speed(agent, "reverse_speed_mps", full * reverse_power, path)
+
     return Car(
         file=path,
         description=text(agent, "description", path),
-        speed_mps=numbers["full_speed_mps"] * numbers["max_speed"],
+        speed_mps=speed,
+        power=power,
+        reverse_speed_mps=reverse_speed,
+        reverse_power=reverse_power,
+        max_speed=most,
         max_move_s=numbers["max_move_s"],
         max_steering_deg=numbers["max_steering_deg"],
         max_pan_deg=numbers["max_pan_deg"],
@@ -134,6 +152,25 @@ def number(params, name, where):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         found = "" if value is None else f", not {value!r}"
         raise CarConfigError(f"{where} needs {name}: a number{found}")
+    return float(value)
+
+
+def optional_power(params, name, most, path):
+    """A motor power (fraction of full power) from the picar_agent section: more than 0 and
+    at most picar_base's max_speed, which is also the value when it is left out."""
+    value = params.get(name, most)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= most:
+        raise CarConfigError(f"{path}: picar_agent's {name} must be a number more than 0 and at "
+                             f"most picar_base's max_speed ({most:g}), not {value!r}")
+    return float(value)
+
+
+def optional_speed(params, name, default, path):
+    """A measured speed in m/s from the picar_agent section, more than 0; default if left out."""
+    value = params.get(name, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise CarConfigError(f"{path}: picar_agent's {name} must be a speed in m/s, more than 0, "
+                             f"not {value!r}")
     return float(value)
 
 

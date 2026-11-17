@@ -28,7 +28,8 @@ picar_base:
     wheelbase_m: 0.145       # measure on the car
     full_speed_mps: 0.5      # measure: speed at full motor power
     max_steering_deg: 30.0
-    max_speed: 0.4           # fraction of full motor power
+    max_speed: 0.6           # fraction of full motor power: with hw.min_duty_percent 0 the PWM duty
+                             # (0.4 = 11 cm/s was too slow, 2026-11-17; 74 % duty drove 0.56 m/s)
     max_move_s: 3.0
     cmd_timeout_s: 0.5
     obstacle_stop_m: 0.25
@@ -43,7 +44,9 @@ picar_base:
       motor_a_pins: [4, 14, 15]      # BCM: enable (PWM), forward, backward
       motor_b_pins: [17, 27, 18]
       motor_pwm_hz: 1000
-      min_duty_percent: 60.0         # the motors do not turn below this: power 0..1 -> 60..100 %
+      # power 0..1 -> min..100 % duty. The team's 60 made slow driving impossible: with fresh
+      # batteries 1 s at 74 % drove 0.56 m (2026-11-17). 0: power = duty (max_speed 0.6 = 60 %).
+      min_duty_percent: 0.0
       i2c_bus: 1
       pca9685_address: 64            # 0x40
       steering_channel: 2
@@ -70,6 +73,17 @@ picar_agent:
     # JPEGs from camera_ros (compressed-image-transport): about 9 Mbit/s over Wi-Fi instead
     # of 74 for raw pictures. The twin leaves this out: raw /camera/image_raw.
     camera_topic: "/camera/image_raw/compressed"
+    # Motor power the agent drives with, a fraction of full power (at most picar_base's
+    # max_speed; the twin leaves these out and drives at max_speed both ways), and the speeds
+    # measured at those powers (the twin's are full_speed_mps x power). With hw.min_duty_percent
+    # 0 power = PWM duty. Measured 2026-11-17 (fresh batteries, 1 s each, distance sensor at a
+    # wall): forward 20 % 0.7 cm, 30 % 8.7 cm, 35 % 21.8 and 6.0 cm (unsteady, near the stall),
+    # 40 % 11.3 cm, 50 % 21.7 cm, 60 % 32.4 cm; reverse 15 % 0.8 cm, 20 % 0.3 cm, 30 % 2.4 cm,
+    # 40 % 6.2 and 7.8 cm, 50 % 16.3 cm, 60 % 21.1 cm. Ferenc chose "a bit faster" than 40 %.
+    forward_power: 0.5
+    reverse_power: 0.5
+    forward_speed_mps: 0.22
+    reverse_speed_mps: 0.16
     length_m: 0.22
     width_m: 0.10
     turn_deg_per_m: 200.0     # measure: heading change per metre at full steering

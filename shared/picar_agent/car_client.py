@@ -16,6 +16,16 @@ from camera import CAMERA_DOWN, CameraDown, as_picture, newest_frame
 
 RANGE_TOPIC = "/ultrasonic/range"
 
+# Told to the AI when picar_base does not answer: the model retried look for minutes and said it
+# would "wait for the camera service" (real car, 2026-11-17, while the car's nodes were down).
+BASE_DOWN = ("picar_base on the car does not answer, so the car cannot move or turn its camera. "
+             "Do not try again: finish with DONE and tell the user to start the car's nodes "
+             "(ros2 launch picar_car car.launch.py on the car).")
+
+
+class BaseDown(Exception):
+    """picar_base does not answer its services."""
+
 
 def clamp(value, low, high):
     return max(low, min(high, float(value)))
@@ -41,12 +51,18 @@ class CarClient:
             turn = 2 * car.max_pan_deg   # we don't know where it points: wait for the longest turn
         else:
             turn = max(abs(pan - self.pan), abs(tilt - self.tilt))
-        self.connector.service_call(
-            ROS2Message(payload={"pan_deg": pan, "tilt_deg": tilt}),
-            target="/picar/look", msg_type="picar_interfaces/srv/Look")
+        self.call("/picar/look", "picar_interfaces/srv/Look", {"pan_deg": pan, "tilt_deg": tilt})
         self.pan, self.tilt = pan, tilt
         self.clock.sleep(0.4 + turn / car.head_deg_per_s)   # let the head get there and settle
         self.still_since = self.clock.time()                # pictures from now on show where it points
+
+    def call(self, target, msg_type, payload, **kwargs):
+        """A picar_base service call; BaseDown if picar_base is not there to answer."""
+        try:
+            return self.connector.service_call(ROS2Message(payload=payload), target=target,
+                                               msg_type=msg_type, **kwargs)
+        except Exception as error:   # RAI: "Service /picar/look not ready within 5.0 seconds"
+            raise BaseDown(f"{BASE_DOWN} ({error})") from None
 
     def look_ahead(self):
         """Point the camera straight ahead, unless it already does."""
@@ -57,18 +73,27 @@ class CarClient:
         """Drive with a fixed steering angle, the camera looking ahead. Returns how far it
         went (metres, negative backward) and picar_base's answer (None if it did not answer):
         .reason is done, obstacle, no_range, timeout, estop or busy, and .min_range_m the
-        closest distance reading during the move."""
+        closest distance reading during the move. Forward and reverse use the car's own
+        power; a move longer than picar_base allows at once (max_move_s) goes in parts."""
         self.look_ahead()
-        speed = self.car.speed_mps
-        duration = abs(distance) / speed
-        request = {"speed": math.copysign(1.0, distance), "steering_deg": steering,
-                   "duration_s": duration}
-        start = self.clock.monotonic()
-        answer = self.connector.service_call(
-            ROS2Message(payload=request), target="/picar/move",
-            msg_type="picar_interfaces/srv/Move", timeout_sec=duration + 5.0).payload
-        # No wheel encoders: work out how far it went from the time it drove.
-        driven = math.copysign(min(abs(distance), speed * (self.clock.monotonic() - start)), distance)
+        car = self.car
+        power, speed = (car.power, car.speed_mps) if distance >= 0 else (car.reverse_power, car.reverse_speed_mps)
+        left = abs(distance) / speed   # seconds still to drive
+        went = 0.0
+        while True:
+            duration = min(left, car.max_move_s)
+            # picar_base takes the speed as a fraction of its max_speed
+            request = {"speed": math.copysign(power / car.max_speed, distance), "steering_deg": steering,
+                       "duration_s": duration}
+            start = self.clock.monotonic()
+            answer = self.call("/picar/move", "picar_interfaces/srv/Move", request,
+                               timeout_sec=duration + 5.0).payload
+            # No wheel encoders: work out how far it went from the time it drove.
+            went += speed * min(duration, self.clock.monotonic() - start)
+            left -= duration
+            if answer is None or answer.reason != "done" or left < 1e-3:
+                break
+        driven = math.copysign(min(abs(distance), went), distance)
         self.clock.sleep(0.3)                  # let the car settle
         self.still_since = self.clock.time()   # pictures from now on show where it stopped
         return driven, answer

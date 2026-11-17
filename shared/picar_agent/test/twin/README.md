@@ -5,7 +5,7 @@ the tools and the driving, not how well the real model sees. pytest skips this f
 
 | File | What it is |
 |---|---|
-| `color_vision.py` | Answers the tools' picture questions by colour (red, blue, yellow) |
+| `color_vision.py` | Answers the tools' picture questions by colour (red, blue, yellow), bounding boxes too |
 | `fake_ollama_obedient.py` | Ollama stand-in on 127.0.0.1:11434: its chat model does what the last tool result says |
 | `test_approach_tools.py` | `approach` from six starts, with where the car really ended (from Gazebo) |
 | `test_approach_agent.py` | The whole agent on one task |

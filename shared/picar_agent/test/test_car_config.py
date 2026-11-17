@@ -35,6 +35,8 @@ def test_the_twins_numbers():
     car = car_config.load_car(str(TWIN_FILE))
     assert car.description == "a simulated Adeept PiCar-B in a room in Gazebo"
     assert car.speed_mps == pytest.approx(0.2)          # full_speed_mps 0.5 x max_speed 0.4
+    assert car.power == car.reverse_power == car.max_speed == 0.4   # left out: max_speed, both ways
+    assert car.reverse_speed_mps == pytest.approx(0.2)
     assert car.max_drive_m == pytest.approx(0.6)        # 0.2 m/s x max_move_s 3
     assert (car.max_steering_deg, car.max_pan_deg, car.max_tilt_deg) == (30.0, 90.0, 40.0)
     assert car.stop_distance_m == 0.25
@@ -48,7 +50,17 @@ def test_the_real_car_starts_with_the_twins_numbers():
     assert real.description == "an Adeept PiCar-B, a real car in a real room"
     different = {field.name for field in dataclasses.fields(twin)
                  if getattr(twin, field.name) != getattr(real, field.name)}
-    assert different == {"file", "description", "own_parts", "camera_topic"}   # until it is measured
+    assert different == {"file", "description", "own_parts", "camera_topic",   # until it is measured
+                         "speed_mps", "reverse_speed_mps", "max_speed",    # measured 2026-11-17
+                         "power", "reverse_power"}
+
+
+def test_the_real_car_uses_its_measured_speeds():
+    # its motors do not turn below about 25 % duty: speed is not full_speed_mps x power
+    real = car_config.load_car(str(REAL_FILE))
+    assert (real.power, real.reverse_power, real.max_speed) == (0.5, 0.5, 0.6)
+    assert real.speed_mps == pytest.approx(0.22) and real.reverse_speed_mps == pytest.approx(0.16)
+    assert real.max_drive_m == pytest.approx(0.66)     # forward: 0.22 m/s x 3 s
 
 
 def test_the_real_car_sends_compressed_pictures_the_twin_raw_ones():
@@ -117,6 +129,11 @@ def base(settings):
     (lambda s: agent(s).pop("description"), "picar_agent needs description: a text"),
     (lambda s: agent(s).update(camera_topic="camera"),
      "camera_topic must be a topic like /camera/image_raw, not 'camera'"),
+    (lambda s: agent(s).update(reverse_power=0.5),
+     r"reverse_power must be a number more than 0 and at most picar_base's max_speed \(0.4\), not 0.5"),
+    (lambda s: agent(s).update(forward_power=0), "forward_power must be a number more than 0"),
+    (lambda s: agent(s).update(forward_power="slow"), "forward_power must be a number"),
+    (lambda s: agent(s).update(reverse_speed_mps=0), "reverse_speed_mps must be a speed in m/s, more than 0"),
 ])
 def test_mistakes_in_the_settings_say_what_to_fix(tmp_path, change, message):
     with pytest.raises(car_config.CarConfigError, match=message):
@@ -169,11 +186,13 @@ def test_the_real_cars_prompt_does_not_mention_gazebo():
 
 def test_the_prompt_follows_other_numbers():
     other = dataclasses.replace(
-        car_config.load_car(str(TWIN_FILE)), speed_mps=0.25, max_move_s=2.0,
+        car_config.load_car(str(TWIN_FILE)), speed_mps=0.25, reverse_speed_mps=0.25, max_move_s=2.0,
         max_steering_deg=25.0, stop_distance_m=0.3, camera_fov_deg=80.0,
         floor=((1.0, 0.5), (0.8, 1.0)))
     prompt = words(picar_prompt(other))
     assert "It drives at 0.25 m/s, at most 0.5 m per drive call." in prompt
+    slower = dataclasses.replace(other, reverse_speed_mps=0.1)
+    assert "It drives at 0.25 m/s forward and 0.1 m/s in reverse, at most 0.5 m" in words(picar_prompt(slower))
     assert "Steering goes from -25 to +25 degrees" in prompt
     assert "when something is 0.3 m or closer" in prompt
     assert "about 80 degrees wide. Something at the left or right edge is 40 degrees" in prompt
