@@ -24,6 +24,18 @@ def floor_words(floor):
     return ", ".join(parts)
 
 
+def floor_line(car):
+    """How far away the floor is in the picture, if that was measured on this car."""
+    if not car.floor_measured:   # the real car still has the twin's table (wrong by 30 % and more)
+        return ("How far away something is cannot be read from the picture on this car yet: approach\n"
+                "  finds out with the distance sensor. The floor right in front of the bumper is below the\n"
+                "  picture; tilt down (-30) to see it.")
+    return (f"With tilt 0 the middle row of the picture is the horizon, and how far down the picture an\n"
+            f"  object touches the floor tells its distance from the bumper: {floor_words(car.floor)}.\n"
+            f"  The floor closer than {min(d for _, d in car.floor):g} m is below the picture; tilt down "
+            "(-30) to see it.")
+
+
 def picar_prompt(car):
     """The AI's instructions: its tools, the car (with its numbers) and how to drive."""
     radius = 180 / (math.pi * car.turn_deg_per_m)   # of the circle the car drives at full steering
@@ -57,9 +69,7 @@ The camera:
   (positive = up). drive points the camera straight ahead first.
 - The picture is about {fov:.0f} degrees wide. Something at the left or right edge is {fov / 2:.0f} degrees to
   that side of where the camera points, halfway between the middle and the edge about {fov / 4:.0f} degrees.
-- With tilt 0 the middle row of the picture is the horizon, and how far down the picture an
-  object touches the floor tells its distance from the bumper: {floor_words(car.floor)}.
-  The floor closer than {min(d for _, d in car.floor):g} m is below the picture; tilt down (-30) to see it.
+- {floor_line(car)}
 - Looking down or to the side you may see parts of your own car: {car.own_parts}.
 
 How to drive:
@@ -73,9 +83,9 @@ How to drive:
   If it is still not there, finish with DONE and tell the user you could not find it.
 - To reach a target you can see, call approach with its name. It drives at the target in
   steps, looks after every step and steers at it, until the safety system stops the car right
-  in front of it: then you have arrived. Call reached with its name and the name of the next
-  target ("" if it was the last one). reached tells you what to do next. If approach loses
-  the target, call look_around.
+  in front of it, or its camera shows the target right in front: then you have arrived. Call
+  reached with its name and the name of the next target ("" if it was the last one). reached
+  tells you what to do next. If approach loses the target, call look_around.
 - If the safety system stops the car in front of something else, back up or turn: driving
   forward again will not move the car.
 - If the user asks for several targets, go to them in order. Never drive to a target you

@@ -92,6 +92,13 @@ def test_every_provider_has_a_maker():
     assert set(llm.MAKERS) == set(llm.PROVIDERS)
 
 
+def test_the_picture_questions_get_their_own_temperature(env):
+    # at 0.2 the same picture got "no" one hour and "yes" the next (real car, 2026-11-24)
+    env.setenv("PICAR_TEMPERATURE", "0.7")
+    model, _ = make_llm(temperature=llm.VISION_TEMPERATURE)
+    assert model.temperature == 0.0
+
+
 @pytest.mark.parametrize("provider", ["ollama", "openai", "google"])
 def test_every_provider_gets_the_temperature(env, provider):
     env.setenv("PICAR_LLM", provider)

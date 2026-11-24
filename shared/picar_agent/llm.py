@@ -19,6 +19,9 @@ from history import compress_history
 PROVIDERS = ("ollama", "openai", "google")
 DEFAULT_OLLAMA_MODEL = "qwen3-vl:4b-instruct"
 DEFAULT_TEMPERATURE = 0.2
+# The tools' questions about pictures: yes/no and boxes, no variety wanted. At 0.2 the same picture
+# got "no" one hour and "yes" the next (the bed's drawer, real car, 2026-11-24).
+VISION_TEMPERATURE = 0.0
 OLLAMA_CONTEXT = 8192   # tokens; compress_history keeps each request well under it
 
 
@@ -83,9 +86,11 @@ def google_model(model, base_url, temperature):   # the key comes from GOOGLE_AP
 MAKERS = {"ollama": ollama_model, "openai": openai_model, "google": google_model}
 
 
-def make_llm():
-    """The chat model chosen in .env. Returns the model and a short description."""
-    provider, model, base_url, temperature = settings()
+def make_llm(temperature=None):
+    """The chat model chosen in .env. Returns the model and a short description.
+    temperature: instead of PICAR_TEMPERATURE (VISION_TEMPERATURE for the tools' picture questions)."""
+    provider, model, base_url, chosen = settings()
+    temperature = chosen if temperature is None else temperature
     if provider == "google":
         base_url = None   # Gemini is always at Google's own address
     llm = MAKERS[provider](model, base_url, temperature)

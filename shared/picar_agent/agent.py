@@ -35,7 +35,7 @@ from rai.communication.ros2 import ROS2Connector, ROS2Context, ROS2HRIConnector,
 from rclpy.logging import get_logger
 
 from car_config import load_car
-from llm import make_llm
+from llm import VISION_TEMPERATURE, make_llm
 from picar_tools import make_picar_tools, save_memory
 from prompt import picar_prompt
 
@@ -61,8 +61,10 @@ class PicarAgent(BaseAgent):
         car = load_car()   # the car's numbers, from PICAR_CONFIG's settings file
         get_logger("agent").info(f"Car: {car.description} ({car.file})")
         self.prompt = picar_prompt(car)
-        # The same model also answers the tools' short questions about pictures
-        tools, self.new_task, self.memory = make_picar_tools(self.ros2_connector, llm, car)
+        # The same model also answers the tools' short questions about pictures, at temperature
+        # 0: the same picture gets the same answer
+        vision, _ = make_llm(temperature=VISION_TEMPERATURE)
+        tools, self.new_task, self.memory = make_picar_tools(self.ros2_connector, vision, car)
         self.agent = create_react_runnable(
             llm=llm,
             tools=tools,

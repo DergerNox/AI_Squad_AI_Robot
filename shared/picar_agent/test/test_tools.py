@@ -18,10 +18,12 @@ import pytest
 from PIL import Image
 from rai.communication.ros2 import ROS2Message
 
+import approach
 import camera
 import car_client
 import car_config
 import picar_tools
+import questions
 
 SHARED = pathlib.Path(__file__).resolve().parents[2]   # shared/picar_agent/test -> shared
 TWIN = car_config.load_car(str(SHARED / "picar_base" / "config" / "sim.yaml"))
@@ -125,8 +127,10 @@ class FakeCar:
 
 
 class FakeVision:
-    """Stands in for the AI model's answers to the tools' picture questions.
-    answers are used in order; after them every answer is "no"."""
+    """Stands in for the AI model's answers to the tools' picture questions. It knows each of
+    the tools' questions (questions.py) and fails the test on any other: a changed or mixed-up
+    question must not get an answer by chance (a new question once took the stop check's name).
+    answers: for WHERE, OTHER, the stop checks and DESCRIBE, in order; after them every answer is "no"."""
 
     def __init__(self):
         self.answers = []
@@ -137,8 +141,8 @@ class FakeVision:
         #                       name a sighting would get now (without using it up)
         # Where exactly the target is (LOCATE): how far down the picture its box reaches, in
         # words (WORD_ROWS), in order, the last one repeats; the box is in the middle; "none": not located.
-        self.how_far = ["upper half"]
-        self.same = ["yes"]   # compared with the first sighting (SAME): in order, the last repeats
+        self.box_bottom = ["upper half"]
+        self.same = ["yes"]   # compared with the first sighting (SAME, CLOSE_UP): in order, the last repeats
         self.box_x = (0.4, 0.6)   # where across the picture the located box is (LOCATE)
         self.pictures = []    # how many pictures came with each question
 
@@ -160,10 +164,12 @@ class FakeVision:
             name = self.name[0] if isinstance(self.name, list) else self.name
             return SimpleNamespace(content=name or f"{colour} box")
         if question.startswith(LOCATE_START):   # where exactly: not one of the answers
-            word = self.how_far.pop(0) if len(self.how_far) > 1 else self.how_far[0]
+            word = self.box_bottom.pop(0) if len(self.box_bottom) > 1 else self.box_bottom[0]
             if word == "none":
                 return SimpleNamespace(content="[]")
             return SimpleNamespace(content=f"```json\n[{box_json('target', *self.box_x, WORD_ROWS[word])}]\n```")
+        if not question.startswith(ANSWERED_IN_ORDER):
+            raise AssertionError(f"FakeVision does not know this question: {question[:100]!r}")
         return SimpleNamespace(content=self.answers.pop(0) if self.answers else "no")
 
 
@@ -171,6 +177,10 @@ NAME_IT_START = picar_tools.NAME_IT.split("{thing}")[0]
 LOCATE_START = picar_tools.LOCATE.split("{target}")[0]
 NAME_CROP_START = picar_tools.NAME_CROP.split("{thing}")[0]
 SAME_START = picar_tools.SAME.split("{target}")[0]
+assert picar_tools.CLOSE_UP.startswith(SAME_START)   # both compare with the first sighting
+# The questions answered from FakeVision.answers, in order
+ANSWERED_IN_ORDER = tuple(text.split("{")[0] for text in (
+    questions.WHERE, questions.OTHER, questions.IN_FRONT, questions.IN_FRONT_FIRST, questions.DESCRIBE))
 WORD_ROWS = {"bottom edge": 0.99, "lower third": 0.83, "middle": 0.55, "upper half": 0.4}
 
 
@@ -249,6 +259,15 @@ def stop_in_front(tools, car, vision, seen="yes, red box"):
     use(tools.drive, distance_m=0.3)
 
 
+# ---------- the test helpers ----------
+
+def test_the_fake_model_fails_on_a_question_it_does_not_know(vision):
+    # a new question once took the stop check's name, and every test still passed (2026-11-24)
+    message = SimpleNamespace(content=[{"type": "text", "text": "Is this a trick question?"}])
+    with pytest.raises(AssertionError, match="FakeVision does not know this question"):
+        vision.invoke([message])
+
+
 # ---------- the car's numbers ----------
 
 # Another car: every number differs from the twin's
@@ -311,6 +330,21 @@ def test_drive_uses_the_cars_power_forward_and_in_reverse(car, vision):
     use(tools.drive, distance_m=0.35)
     use(tools.drive, distance_m=-0.15)
     assert car.moves == [move(0.875, 0.0, 2.0), move(-0.375, 0.0, 2.0)]   # of max_speed 0.4
+
+
+def test_every_move_is_longer_by_the_start_up_and_it_does_not_count_as_distance(car, vision):
+    # the real car: 0.2 s moved it 4 mm, 0.5 s 5 cm, 0.7 s about 10 cm (2026-11-24)
+    tools = make_tools(car, vision, dataclasses.replace(TWIN, start_lag_s=0.35))
+    text = use(tools.drive, distance_m=0.1).content
+    assert car.moves == [move(1.0, 0.0, 0.1 / 0.2 + 0.35)]
+    assert text.startswith("Drove +0.10 m")
+
+
+def test_with_a_start_up_a_long_move_goes_in_parts_each_with_its_start_up(car, vision):
+    tools = make_tools(car, vision, dataclasses.replace(TWIN, start_lag_s=0.35, reverse_speed_mps=0.1))
+    text = use(tools.drive, distance_m=-0.4).content   # 4 s of rolling: 2.65 s in the first part
+    assert [round(m["duration_s"], 2) for m in car.moves] == [3.0, 1.7]
+    assert text.startswith("Drove -0.40 m")
 
 
 def test_a_long_slow_reverse_goes_in_parts_of_at_most_max_move_s(car, vision):
@@ -382,7 +416,7 @@ def test_blocked_drive_says_it_did_not_move_and_asks_the_camera_once(tools, car,
 
 def test_the_camera_check_names_the_target_being_searched(tools, car, vision):
     vision.answers = ["middle"]
-    vision.how_far = ["none"]   # the first sighting cannot be cut out: nothing to compare with
+    vision.box_bottom = ["none"]   # the first sighting cannot be cut out: nothing to compare with
     use(tools.look_around, target="red box")
     car.results = [("obstacle", 0.5, 0.2)]
     text = use(tools.drive, distance_m=0.6).content
@@ -437,20 +471,20 @@ def test_a_reading_in_between_starts_the_count_again(tools, car):
 def test_approach_lets_the_camera_judge_arrival_when_the_sensor_gets_no_echo(tools, car, vision):
     car.results = [("no_range", 0.3, 4.0)]
     vision.answers = ["middle"]
-    vision.how_far = ["middle", "bottom edge"]   # before the step, and after the stop
+    vision.box_bottom = ["middle", "bottom edge"]   # before the step, and after the stop
     vision.name = "red stick"
     text = use(tools.approach, target="red stick").content
     assert vision.questions[-1].startswith("Locate the red stick in the image.")
     assert "the camera shows it right in front of the car" in text
     assert "call reached now" in text
     answer = use(tools.reached, target="red stick").content
-    assert answer.startswith("Noted: red stick (by the camera: the distance sensor could not see it).")
+    assert answer.startswith("Noted: red stick (by the camera).")
 
 
 def test_without_the_camera_close_up_no_echo_is_not_arrival(tools, car, vision):
     car.results = [("no_range", 0.3, 4.0)]
     vision.answers = ["middle"]
-    vision.how_far = ["middle", "lower third"]
+    vision.box_bottom = ["middle", "lower third"]
     vision.name = "red stick"
     text = use(tools.approach, target="red stick").content
     assert "Stopped early: the distance sensor had no fresh reading" in text
@@ -460,21 +494,21 @@ def test_without_the_camera_close_up_no_echo_is_not_arrival(tools, car, vision):
 def test_the_camera_arrival_is_forgotten_when_the_car_moves(tools, car, vision):
     car.results = [("no_range", 0.3, 4.0)]
     vision.answers = ["middle"]
-    vision.how_far = ["middle", "bottom edge"]
+    vision.box_bottom = ["middle", "bottom edge"]
     vision.name = "red stick"
     use(tools.approach, target="red stick")
     use(tools.drive, distance_m=-0.3)
     assert use(tools.reached, target="red stick").content.startswith("Not reached yet")
 
 
-# ---------- the camera distance during approach ----------
+# ---------- approach: step sizes from the sensor and the camera ----------
 
 def test_a_target_the_sensor_does_not_hear_counts_by_the_camera_without_driving_into_it(
         tools, car, vision):
     # the real car's sensor never heard a small blue box: approach drove 0.58 m past it
     car.range_m = math.inf          # the sensor hears nothing ahead
     vision.answers = ["middle"]
-    vision.how_far = ["bottom edge"]
+    vision.box_bottom = ["bottom edge"]
     text = use(tools.approach, target="blue box").content
     assert car.moves == []
     assert "The distance sensor does not hear the blue box, but the camera shows it right in front" in text
@@ -486,7 +520,7 @@ def test_a_target_the_sensor_hears_still_ends_with_the_safety_stop(tools, car, v
     car.range_m = 0.30              # the sensor hears it: arrival stays the safety stop's
     car.results = [("obstacle", 0.5, 0.24)]
     vision.answers = ["middle", "yes, blue box"]
-    vision.how_far = ["bottom edge"]
+    vision.box_bottom = ["bottom edge"]
     text = use(tools.approach, target="blue box").content
     assert len(car.moves) == 1
     assert "Safety stop: something is 0.24 m in front of the bumper." in text
@@ -497,7 +531,7 @@ def test_close_to_a_target_the_sensor_does_not_hear_the_steps_are_10_cm(tools, c
     # a low box on the real car: the sensor heard the cabinet behind it and the car hit the box
     car.range_m = math.inf          # the sensor alone would allow the longest step (0.6 m)
     vision.answers = ["middle", "middle"]
-    vision.how_far = ["lower third", "bottom edge"]
+    vision.box_bottom = ["lower third", "bottom edge"]
     use(tools.approach, target="blue box")
     assert car.moves == [move(1.0, 0.0, 0.1 / 0.2)]   # 10 cm, then arrived by the camera
 
@@ -506,7 +540,7 @@ def test_in_the_lower_third_with_the_sensor_hearing_it_the_step_goes_to_the_bott
         tools, car, vision):
     car.range_m = 0.5               # the sensor hears it: its step would be 0.3 m
     vision.answers = ["middle"]
-    vision.how_far = ["lower third"]
+    vision.box_bottom = ["lower third"]
     use(tools.approach, target="blue box")
     step = picar_tools.floor_distance(TWIN.floor, 0.83) - 0.35   # to the bottom edge: about 0.2 m
     assert car.moves[0] == move(1.0, 0.0, step / 0.2)
@@ -521,7 +555,7 @@ def test_the_sensor_hears_the_target_if_it_reads_about_where_the_camera_sees_it(
         tools, car, vision, reading, step):
     car.range_m = reading
     vision.answers = ["middle"]
-    vision.how_far = ["lower third"]
+    vision.box_bottom = ["lower third"]
     use(tools.approach, target="blue box")
     assert car.moves[0]["duration_s"] == pytest.approx(step / 0.2, abs=0.01)
 
@@ -529,7 +563,7 @@ def test_the_sensor_hears_the_target_if_it_reads_about_where_the_camera_sees_it(
 def test_close_to_a_target_the_sensor_does_not_hear_side_corrections_reverse(tools, car, vision):
     car.range_m = math.inf
     vision.answers = ["middle", "left", "middle"]
-    vision.how_far = ["lower third", "bottom edge"]
+    vision.box_bottom = ["lower third", "bottom edge"]
     use(tools.approach, target="blue box")
     # 10 cm straight, then 10 degrees left while reversing (0.05 m at 200 deg/m), then arrived
     assert car.moves == [move(1.0, 0.0, 0.5), move(-1.0, -30.0, 0.05 / 0.2)]
@@ -538,7 +572,7 @@ def test_close_to_a_target_the_sensor_does_not_hear_side_corrections_reverse(too
 def test_a_target_the_sensor_hears_gets_the_usual_side_correction(tools, car, vision):
     car.range_m = 0.5
     vision.answers = ["middle", "left"]
-    vision.how_far = ["lower third"]
+    vision.box_bottom = ["lower third"]
     use(tools.approach, target="blue box")
     assert car.moves[1] == move(1.0, 30.0, 0.1 / 0.2)   # 20 degrees forward, as before
 
@@ -547,7 +581,7 @@ def test_a_target_the_sensor_hears_gets_the_usual_side_correction(tools, car, vi
 def test_far_away_the_sensor_alone_sizes_the_step(tools, car, vision, answer):
     car.range_m = 0.5
     vision.answers = ["middle"]
-    vision.how_far = [answer]
+    vision.box_bottom = [answer]
     use(tools.approach, target="blue box")
     assert car.moves[0] == move(1.0, 0.0, (0.5 - 0.25 + 0.05) / 0.2)
 
@@ -706,6 +740,41 @@ def test_blocked_turn_reverses_the_rest_with_the_steering_the_other_way(tools, c
                            "The heading changed about +50 degrees")
 
 
+def textured(seed, noise=0, shift=0):
+    """A 64 x 48 camera picture of random texture (the same seed: the same scene), plus noise,
+    the scene moved shift pixels to the right (as when the car turns left)."""
+    rng = np.random.default_rng(seed)
+    pixels = np.roll(rng.integers(0, 256, (48, 64, 3)).astype(int), shift, axis=1)
+    if noise:
+        pixels = np.clip(pixels + np.random.default_rng(seed + 99).integers(-noise, noise + 1, pixels.shape), 0, 255)
+    return SimpleNamespace(height=48, width=64, encoding="rgb8", data=pixels.astype(np.uint8).tobytes())
+
+
+def test_a_turn_the_camera_says_did_not_happen_says_back_up(tools, car):
+    # the real car, pressed against the bed and a plush toy: two turns of 120 did not move it,
+    # and the AI was told it had turned (2026-11-24)
+    use(tools.look)                            # the camera points ahead: no look before the turn
+    car.image = textured(1)
+    car.next_image = textured(1, noise=8)    # the same view, a little noisier: it did not turn
+    text = use(tools.turn, angle_deg=90).content
+    assert "The camera picture says the car turned only about 0 degrees, not 90" in text
+    assert "Back up 0.2 m (drive with distance_m -0.2) before you turn again." in text
+
+
+def test_a_turn_that_changed_the_view_says_nothing_more(tools, car):
+    use(tools.look)
+    car.image = textured(1)
+    car.next_image = textured(1, shift=30)    # the view slid 30 of 64 pixels: it turned about 29 deg
+    assert "turned only about" not in use(tools.turn, angle_deg=90).content
+
+
+def test_a_plain_view_cannot_tell_whether_the_car_turned(tools, car):
+    use(tools.look)
+    car.image = SimpleNamespace(height=48, width=64, encoding="rgb8", data=bytes([90] * 48 * 64 * 3))
+    car.next_image = SimpleNamespace(height=48, width=64, encoding="rgb8", data=bytes([95] * 48 * 64 * 3))
+    assert "turned only about" not in use(tools.turn, angle_deg=90).content   # a bare wall: no alarm
+
+
 # ---------- look ----------
 
 def test_look_is_limited_and_says_how_to_face_what_it_sees(tools, car):
@@ -862,6 +931,12 @@ def test_names_the_real_model_gave_the_targets(name, target):
     assert picar_tools.names_target(name, target)
 
 
+@pytest.mark.parametrize("name", ["white blanket", "white pillow", "white duvet"])
+def test_things_of_their_own_are_not_the_bed(name):
+    # the real car took a white blanket for the "white bed" (2026-11-20)
+    assert not picar_tools.names_target(name, "white bed")
+
+
 def test_look_around_stays_within_the_heads_range(car, vision):
     # the real car's head turns only about 50 degrees: asked for 90 it stopped there, and
     # look_around told the AI to turn about 40 degrees too far (2026-11-20)
@@ -895,7 +970,7 @@ def test_a_close_look_at_the_targets_box_tells_it_from_what_stands_in_front(tool
     vision.answers = ["middle"]
     vision.name = "white bag"
     vision.crop_name = "white bed"
-    vision.how_far = ["lower third"]               # the bed's box, in the middle of the picture
+    vision.box_bottom = ["lower third"]               # the bed's box, in the middle of the picture
     text = use(tools.look_around, target="white bed").content
     assert "seen with the camera at pan 0, middle of the picture" in text
     assert any(q.startswith(NAME_CROP_START) for q in vision.questions)
@@ -1059,7 +1134,7 @@ def test_approach_turns_towards_a_target_at_the_side_and_reverses_if_that_did_no
 
 def test_approach_backs_up_towards_a_target_it_lost(tools, car, vision):
     vision.answers = ["right", "no", "no"]
-    vision.how_far = ["none"]   # and the model cannot locate it either
+    vision.box_bottom = ["none"]   # and the model cannot locate it either
     text = use(tools.approach, target="red box").content
     # lost after a turn right: back up with the front swinging right (steering left)
     # (0.2 m since 2026-11-17, was 0.3: nothing sees behind the car)
@@ -1072,7 +1147,7 @@ def test_close_up_the_target_is_located_before_it_is_given_up(tools, car, vision
     # the real car: after a drive at the blue box the model said "no blue box" (too close?)
     car.results = [("done", 1.0, 4.0), ("obstacle", 0.5, 0.24)]
     vision.answers = ["middle", "no", "yes, red box"]
-    vision.how_far = ["middle", "lower third"]   # the box, then located after the "no"
+    vision.box_bottom = ["middle", "lower third"]   # the box, then located after the "no"
     text = use(tools.approach, target="red box").content
     assert all(m["speed"] > 0 for m in car.moves) and len(car.moves) == 2   # no backing up
     assert "lost it" not in text and "Safety stop" in text
@@ -1084,7 +1159,7 @@ def test_a_box_that_shows_something_else_does_not_count_as_the_lost_target(tools
     car.range_m = math.inf
     vision.answers = ["middle", "no", "no"]        # seen, then gone; not below the camera either
     vision.name = "white bed"
-    vision.how_far = ["middle", "bottom edge"]     # the box, then the "bed" filling the bottom
+    vision.box_bottom = ["middle", "bottom edge"]     # the box, then the "bed" filling the bottom
     vision.same = ["no"]                           # not like the bed's first sighting
     text = use(tools.approach, target="white bed").content
     assert "right in front of the car" not in text and "lost it, backed up" in text
@@ -1095,7 +1170,7 @@ def test_without_a_first_sighting_to_compare_the_close_look_names_the_lost_targe
     car.range_m = math.inf
     vision.answers = ["middle", "no", "no"]
     vision.name = "white bed"
-    vision.how_far = ["middle", "bottom edge", "none"]   # its first sighting cannot be cut out
+    vision.box_bottom = ["middle", "bottom edge", "none"]   # its first sighting cannot be cut out
     vision.crop_name = "clear plastic bag"
     text = use(tools.approach, target="white bed").content
     assert "right in front of the car" not in text and "lost it, backed up" in text
@@ -1124,7 +1199,7 @@ def test_a_target_gone_from_straight_ahead_is_looked_for_below_before_backing_up
     # at tilt 0 the floor within ~0.4 m of the bumper is below the picture; the head tilts
     car.range_m = math.inf                    # the sensor does not hear it
     vision.answers = ["middle", "no", "middle"]   # seen, then gone, then seen looking down
-    vision.how_far = ["middle", "none"]       # and its box is not found straight ahead either
+    vision.box_bottom = ["middle", "none"]       # and its box is not found straight ahead either
     text = use(tools.approach, target="blue box").content
     assert (0.0, picar_tools.LOOK_DOWN_DEG) in car.looks
     assert all(m["speed"] > 0 for m in car.moves)   # did not back up
@@ -1135,7 +1210,7 @@ def test_looking_down_with_the_sensor_hearing_it_takes_one_small_step(tools, car
     car.range_m = 0.3                         # heard close: the safety stop will end the step
     car.results = [("done", 1.0, 0.3), ("obstacle", 0.5, 0.24)]
     vision.answers = ["middle", "no", "middle", "yes, blue box"]
-    vision.how_far = ["middle", "none"]
+    vision.box_bottom = ["middle", "none"]
     text = use(tools.approach, target="blue box").content
     assert car.moves[-1] == move(1.0, 0.0, picar_tools.APPROACH_CLOSE_M / 0.2)
     assert "saw it below the camera" in text and "Safety stop" in text
@@ -1144,11 +1219,47 @@ def test_looking_down_with_the_sensor_hearing_it_takes_one_small_step(tools, car
 def test_below_the_camera_it_must_look_like_the_first_sighting(tools, car, vision):
     car.range_m = math.inf
     vision.answers = ["middle", "no", "middle"]   # seen, gone, "seen" looking down
-    vision.how_far = ["middle", "none", "bottom edge"]   # not ahead; then the first sighting, the box below
+    vision.box_bottom = ["middle", "none", "bottom edge"]   # not ahead; then the first sighting, the box below
     vision.same = ["no"]                          # but it is not the thing seen first
     text = use(tools.approach, target="blue box").content
     assert "the camera shows it right in front of the car" not in text and "lost it, backed up" in text
 
+
+def test_not_below_either_it_backs_up_as_before(tools, car, vision):
+    vision.answers = ["middle", "no", "no", "no"]
+    vision.box_bottom = ["middle", "none"]
+    text = use(tools.approach, target="red box").content
+    assert car.moves[-1]["speed"] < 0 and "lost it, backed up" in text
+
+
+def test_approach_without_the_target_in_the_picture_does_not_move(tools, car, vision):
+    text = use(tools.approach, target="red box").content
+    assert car.moves == []
+    assert text.startswith("The red box is not in the picture straight ahead (did not move).")
+
+
+def test_approach_stops_after_12_steps(tools, car, vision):
+    vision.answers = ["middle"] * 12
+    text = use(tools.approach, target="red box").content
+    assert len(car.moves) == 12
+    assert text.endswith("Not there yet: call approach again. Reached so far: nothing yet.")
+
+
+def test_approach_points_the_camera_ahead_first(tools, car, vision):
+    use(tools.look, pan_deg=45)
+    use(tools.approach, target="red box")
+    assert car.looks == [(45.0, 0.0), (0.0, 0.0)]
+
+
+def test_approach_does_not_drive_to_a_reached_target(tools, car, vision):
+    stop_in_front(tools, car, vision)
+    use(tools.reached, target="red box")
+    moves = len(car.moves)
+    text = use(tools.approach, target="red box").content
+    assert text.startswith("You already reached the red box.") and len(car.moves) == moves
+
+
+# ---------- approach: arrived? (the rules listed in approach.py) ----------
 
 def test_gone_from_the_middle_just_beyond_the_stop_a_close_up_of_the_first_sighting_has_arrived(
         tools, car, vision):
@@ -1157,7 +1268,7 @@ def test_gone_from_the_middle_just_beyond_the_stop_a_close_up_of_the_first_sight
     car.range_m = 0.32                                   # within 0.25 + 0.1
     vision.answers = ["middle", "no"]                    # seen, then "gone"
     vision.name = "white bed"
-    vision.how_far = ["upper half", "none", "upper half"]   # not located now; the first sighting is
+    vision.box_bottom = ["upper half", "none", "upper half"]   # not located now; the first sighting is
     text = use(tools.approach, target="white bed").content
     assert "Something is 0.32 m in front of the bumper, and the camera shows it is the white bed" in text
     question = next(q for q in vision.questions if "a close-up of the same white bed?" in q)
@@ -1170,7 +1281,7 @@ def test_a_close_up_unlike_the_first_sighting_is_not_arrival(tools, car, vision)
     car.range_m = 0.32
     vision.answers = ["middle", "no", "no"]              # seen, gone, not below either
     vision.name = "white bed"
-    vision.how_far = ["upper half", "none", "upper half"]
+    vision.box_bottom = ["upper half", "none", "upper half"]
     vision.same = ["no"]                                 # a plush toy in front, not the bed
     text = use(tools.approach, target="white bed").content
     assert "lost it, backed up" in text and "you have arrived" not in text
@@ -1180,51 +1291,16 @@ def test_gone_from_the_middle_with_nothing_close_asks_no_close_up(tools, car, vi
     car.range_m = 1.0
     vision.answers = ["middle", "no", "no"]
     vision.name = "white bed"
-    vision.how_far = ["upper half", "none", "upper half"]
+    vision.box_bottom = ["upper half", "none", "upper half"]
     use(tools.approach, target="white bed")
     assert not any("a close-up of the same" in q for q in vision.questions)
-
-
-def textured(seed, noise=0, shift=0):
-    """A 64 x 48 camera picture of random texture (the same seed: the same scene), plus noise,
-    the scene moved shift pixels to the right (as when the car turns left)."""
-    rng = np.random.default_rng(seed)
-    pixels = np.roll(rng.integers(0, 256, (48, 64, 3)).astype(int), shift, axis=1)
-    if noise:
-        pixels = np.clip(pixels + np.random.default_rng(seed + 99).integers(-noise, noise + 1, pixels.shape), 0, 255)
-    return SimpleNamespace(height=48, width=64, encoding="rgb8", data=pixels.astype(np.uint8).tobytes())
-
-
-def test_a_turn_the_camera_says_did_not_happen_says_back_up(tools, car):
-    # the real car, pressed against the bed and a plush toy: two turns of 120 did not move it,
-    # and the AI was told it had turned (2026-11-24)
-    use(tools.look)                            # the camera points ahead: no look before the turn
-    car.image = textured(1)
-    car.next_image = textured(1, noise=8)    # the same view, a little noisier: it did not turn
-    text = use(tools.turn, angle_deg=90).content
-    assert "The camera picture says the car turned only about 0 degrees, not 90" in text
-    assert "Back up 0.2 m (drive with distance_m -0.2) before you turn again." in text
-
-
-def test_a_turn_that_changed_the_view_says_nothing_more(tools, car):
-    use(tools.look)
-    car.image = textured(1)
-    car.next_image = textured(1, shift=30)    # the view slid 30 of 64 pixels: it turned about 29 deg
-    assert "turned only about" not in use(tools.turn, angle_deg=90).content
-
-
-def test_a_plain_view_cannot_tell_whether_the_car_turned(tools, car):
-    use(tools.look)
-    car.image = SimpleNamespace(height=48, width=64, encoding="rgb8", data=bytes([90] * 48 * 64 * 3))
-    car.next_image = SimpleNamespace(height=48, width=64, encoding="rgb8", data=bytes([95] * 48 * 64 * 3))
-    assert "turned only about" not in use(tools.turn, angle_deg=90).content   # a bare wall: no alarm
 
 
 def at_the_white_bed(vision, same):
     """The model sees the white bed straight ahead, its box filling the picture's width low down."""
     vision.name = "white bed"
     vision.box_x = (0.0, 1.0)
-    vision.how_far = ["lower third"]      # down to 83 %
+    vision.box_bottom = ["lower third"]      # down to 83 %
     vision.same = same
 
 
@@ -1264,7 +1340,7 @@ def test_a_target_that_filled_the_view_and_vanished_is_checked_even_with_nothing
     car.range_m = 1.5
     vision.answers = ["middle", "no"]
     at_the_white_bed(vision, ["no", "no", "yes"])
-    vision.how_far = ["lower third", "lower third", "none", "lower third"]   # gone: not located
+    vision.box_bottom = ["lower third", "lower third", "none", "lower third"]   # gone: not located
     text = use(tools.approach, target="white bed").content
     assert "like when you first saw it" in text and "lost it" not in text
 
@@ -1277,8 +1353,11 @@ def test_with_something_lying_in_front_the_targets_box_alone_can_say_arrived(too
     at_the_white_bed(vision, ["no", "yes"])   # the whole picture: no; the bed's box alone: yes
     text = use(tools.approach, target="white bed").content
     assert car.moves == [] and "with something lying in front of it: this is as close as the car can get" in text
-    asked = [i for i, q in enumerate(vision.questions) if "a close-up of the same white bed?" in q]
+    asked = [i for i, q in enumerate(vision.questions) if q.startswith(SAME_START)]
     assert len(asked) == 2 and all(vision.pictures[i] == 2 for i in asked)
+    # the whole picture: a close-up of the first sighting? Then only the box: the same as it?
+    assert "a close-up of the same white bed?" in vision.questions[asked[0]]
+    assert "Is the thing in the second picture the same white bed?" in vision.questions[asked[1]]
     assert use(tools.reached, target="white bed").content.startswith("Noted: white bed")
 
 
@@ -1296,14 +1375,14 @@ def test_a_big_target_filling_the_view_with_something_near_has_arrived_without_a
 
 def three_short_approaches(tools, monkeypatch, target="red box"):
     """Three approach calls of one step each (none arrives); returns their texts."""
-    monkeypatch.setattr(picar_tools, "APPROACH_MAX_STEPS", 1)
+    monkeypatch.setattr(approach, "APPROACH_MAX_STEPS", 1)
     return [use(tools.approach, target=target).content for _ in range(3)]
 
 
 def test_after_three_approaches_close_to_the_target_it_counts_as_arrived(tools, car, vision, monkeypatch):
     # the real car looped approach, back up, approach for four minutes at the bed (2026-11-24)
     vision.answers = ["middle"] * 3
-    vision.how_far = ["lower third"]      # close: down in the lower third of the picture
+    vision.box_bottom = ["lower third"]      # close: down in the lower third of the picture
     texts = three_short_approaches(tools, monkeypatch)
     assert "Not there yet" in texts[0] and "Not there yet" in texts[1]
     assert "After 3 tries the red box is close in front of the car" in texts[2]
@@ -1312,7 +1391,7 @@ def test_after_three_approaches_close_to_the_target_it_counts_as_arrived(tools, 
 
 def test_after_three_approaches_far_from_the_target_it_says_finish(tools, car, vision, monkeypatch):
     vision.answers = ["middle"] * 3
-    vision.how_far = ["upper half"]       # still far
+    vision.box_bottom = ["upper half"]       # still far
     texts = three_short_approaches(tools, monkeypatch)
     assert "do not call approach again. Finish with DONE" in texts[2]
     moves = len(car.moves)
@@ -1322,45 +1401,11 @@ def test_after_three_approaches_far_from_the_target_it_says_finish(tools, car, v
 
 
 def test_the_approach_count_starts_again_for_another_target(tools, car, vision, monkeypatch):
-    monkeypatch.setattr(picar_tools, "APPROACH_MAX_STEPS", 1)
+    monkeypatch.setattr(approach, "APPROACH_MAX_STEPS", 1)
     vision.answers = ["middle"] * 3
     use(tools.approach, target="red box")
     use(tools.approach, target="red box")
     assert "Not there yet" in use(tools.approach, target="blue box").content
-
-
-def test_not_below_either_it_backs_up_as_before(tools, car, vision):
-    vision.answers = ["middle", "no", "no", "no"]
-    vision.how_far = ["middle", "none"]
-    text = use(tools.approach, target="red box").content
-    assert car.moves[-1]["speed"] < 0 and "lost it, backed up" in text
-
-
-def test_approach_without_the_target_in_the_picture_does_not_move(tools, car, vision):
-    text = use(tools.approach, target="red box").content
-    assert car.moves == []
-    assert text.startswith("The red box is not in the picture straight ahead (did not move).")
-
-
-def test_approach_stops_after_12_steps(tools, car, vision):
-    vision.answers = ["middle"] * 12
-    text = use(tools.approach, target="red box").content
-    assert len(car.moves) == 12
-    assert text.endswith("Not there yet: call approach again. Reached so far: nothing yet.")
-
-
-def test_approach_points_the_camera_ahead_first(tools, car, vision):
-    use(tools.look, pan_deg=45)
-    use(tools.approach, target="red box")
-    assert car.looks == [(45.0, 0.0), (0.0, 0.0)]
-
-
-def test_approach_does_not_drive_to_a_reached_target(tools, car, vision):
-    stop_in_front(tools, car, vision)
-    use(tools.reached, target="red box")
-    moves = len(car.moves)
-    text = use(tools.approach, target="red box").content
-    assert text.startswith("You already reached the red box.") and len(car.moves) == moves
 
 
 # ---------- reached ----------

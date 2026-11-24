@@ -54,7 +54,7 @@ def test_the_real_car_starts_with_the_twins_numbers():
                          "speed_mps", "reverse_speed_mps", "max_speed",    # measured 2026-11-17
                          "power", "reverse_power", "max_pan_deg",
                          "approach_step_m", "camera_fov_deg",               # 2026-11-24
-                         "turn_power", "turn_speed_mps"}
+                         "turn_power", "turn_speed_mps", "start_lag_s", "floor"}
 
 
 def test_the_real_car_looks_again_after_shorter_approach_steps():
@@ -69,12 +69,32 @@ def test_turns_drive_at_their_own_power_on_the_real_car_only():
     # at full lock the real car's wheels barely rolled at 0.5 (2026-11-24)
     twin, real = car_config.load_car(str(TWIN_FILE)), car_config.load_car(str(REAL_FILE))
     assert (twin.turn_power, twin.turn_speed_mps) == (twin.power, twin.speed_mps)
-    assert (real.turn_power, real.turn_speed_mps) == (0.6, 0.12)
+    assert (real.turn_power, real.turn_speed_mps) == (0.6, 0.15)
 
 
 def test_a_turn_power_without_a_measured_speed_scales_the_full_speed(tmp_path):
     car = car_config.load_car(settings_with(tmp_path, lambda s: agent(s).update(turn_power=0.2)))
     assert car.turn_power == 0.2 and car.turn_speed_mps == pytest.approx(0.1)   # 0.5 m/s x 0.2
+
+
+def test_the_floor_table_is_told_to_the_ai_only_where_it_was_measured(tmp_path):
+    guessed = car_config.load_car(settings_with(tmp_path, lambda s: agent(s).update(floor_measured=False)))
+    twin, guess = words(picar_prompt(car_config.load_car(str(TWIN_FILE)))), words(picar_prompt(guessed))
+    assert "of the way down" in twin and "of the way down" not in guess
+    assert "How far away something is cannot be read from the picture on this car yet" in guess
+    assert "tilt down (-30) to see it" in twin and "tilt down (-30) to see it" in guess
+
+
+def test_the_real_cars_floor_table_was_measured():
+    # with a basket on the floor, the distance sensor and the model's box (2026-11-24)
+    real = car_config.load_car(str(REAL_FILE))
+    assert real.floor_measured and dict(real.floor)[0.9] == 0.49 and dict(real.floor)[0.7] == 0.93
+    assert "at the bottom edge 0.38 m, 95% of the way down 0.43 m" in words(picar_prompt(real))
+
+
+def test_floor_measured_must_be_true_or_false(tmp_path):
+    with pytest.raises(car_config.CarConfigError, match="floor_measured must be true or false, not 'no'"):
+        car_config.load_car(settings_with(tmp_path, lambda s: agent(s).update(floor_measured="no")))
 
 
 def test_the_real_cars_camera_is_about_53_degrees_wide():
@@ -86,8 +106,15 @@ def test_the_real_car_uses_its_measured_speeds():
     # its motors do not turn below about 25 % duty: speed is not full_speed_mps x power
     real = car_config.load_car(str(REAL_FILE))
     assert (real.power, real.reverse_power, real.max_speed) == (0.5, 0.5, 0.6)
-    assert real.speed_mps == pytest.approx(0.22) and real.reverse_speed_mps == pytest.approx(0.16)
-    assert real.max_drive_m == pytest.approx(0.66)     # forward: 0.22 m/s x 3 s
+    assert real.speed_mps == pytest.approx(0.28) and real.reverse_speed_mps == pytest.approx(0.25)
+    # the motors take 0.35 s to get it rolling (2026-11-24): 0.28 m/s x (3 - 0.35) s
+    assert real.start_lag_s == 0.35 and real.max_drive_m == pytest.approx(0.742)
+
+
+def test_start_lag_must_be_less_than_half_a_move(tmp_path):
+    with pytest.raises(car_config.CarConfigError, match="start_lag_s must be seconds, 0 or more"):
+        car_config.load_car(settings_with(tmp_path, lambda s: agent(s).update(start_lag_s=2.0)))
+    assert car_config.load_car(str(TWIN_FILE)).start_lag_s == 0.0
 
 
 def test_the_real_car_sends_compressed_pictures_the_twin_raw_ones():
@@ -211,7 +238,7 @@ def test_the_prompt_says_how_to_just_look_and_to_stop_at_the_emergency_stop():
 
 def test_the_real_cars_prompt_gives_its_own_limits():
     prompt = words(picar_prompt(car_config.load_car(str(REAL_FILE))))
-    assert "at most 0.66 m per drive call" in prompt   # as exact as drive uses it (was "0.7")
+    assert "at most 0.74 m per drive call" in prompt   # as exact as drive uses it (was "0.7")
     assert "Pan goes from -40 to 40 degrees" in prompt  # at -50 the pan servo strained (was 90, then 50)
     assert "finish with DONE and tell the user you could not find it" in prompt
 

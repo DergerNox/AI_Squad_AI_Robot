@@ -66,11 +66,16 @@ class Car:
     # barely roll at the forward power (2026-11-24). None: the forward power and speed.
     turn_power: float = None
     turn_speed_mps: float = None
+    floor_measured: bool = True   # False: the floor table is a guess, so the AI is not told it
+    # How long the motors take to get the car rolling: every move is this much longer, and the
+    # first part of it does not count as distance. The real car: a 0.2 s drive moved it 4 mm,
+    # 0.5 s 5 cm, 0.7 s about 10 cm (2026-11-24). The twin's motors start at once: 0.
+    start_lag_s: float = 0.0
 
     @property
     def max_drive_m(self):
-        """The longest drive in one move."""
-        return self.speed_mps * self.max_move_s
+        """The longest drive in one move (picar_base's longest move, less the start-up)."""
+        return self.speed_mps * (self.max_move_s - self.start_lag_s)
 
     @property
     def approach_max_m(self):
@@ -159,6 +164,8 @@ def load_car(spec=None, share=ros_share):
         approach_step_m=optional_length(agent, "approach_step_m", path),
         turn_power=turn_power,
         turn_speed_mps=turn_speed,
+        floor_measured=optional_flag(agent, "floor_measured", True, path),
+        start_lag_s=start_lag(agent, numbers["max_move_s"], path),
     )
 
 
@@ -195,6 +202,23 @@ def optional_speed(params, name, default, path):
         raise CarConfigError(f"{path}: picar_agent's {name} must be a speed in m/s, more than 0, "
                              f"not {value!r}")
     return float(value)
+
+
+def start_lag(params, max_move_s, path):
+    """start_lag_s from the picar_agent section: 0 or more, less than half of max_move_s."""
+    value = params.get("start_lag_s", 0.0)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value < max_move_s / 2:
+        raise CarConfigError(f"{path}: picar_agent's start_lag_s must be seconds, 0 or more and less than "
+                             f"half of picar_base's max_move_s ({max_move_s:g}), not {value!r}")
+    return float(value)
+
+
+def optional_flag(params, name, default, path):
+    """true or false from the picar_agent section; default if left out."""
+    value = params.get(name, default)
+    if not isinstance(value, bool):
+        raise CarConfigError(f"{path}: picar_agent's {name} must be true or false, not {value!r}")
+    return value
 
 
 def optional_length(params, name, path):

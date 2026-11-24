@@ -12,18 +12,26 @@ the real car through the same ROS 2 names.
 | `agent.py` | The loop: the conversation, your input and its answers |
 | `llm.py` | The AI model chosen in `.env` (Ollama, OpenAI or Gemini) |
 | `picar_tools.py` | The tools: drive, turn, look, look_around, approach, reached, remember |
+| `approach.py` | approach's steps, and its rules for "arrived" (listed at the top of the file) |
+| `eyes.py` | The tools' questions about pictures, and the first sighting of each target to compare with |
+| `questions.py` | The question texts the vision model gets, and how its answers are read |
+| `moves.py` | Driving for the tools, and telling the AI what happened (stops, a car that did not move) |
+| `picture_math.py` | Cut-outs, picture changes, how far the view turned: pictures without the model |
+| `task_state.py` | What the tools know about the task in progress |
+| `picture_log.py` | Keeps each task's pictures and questions (`PICAR_SAVE_PICTURES`), wipes old runs |
 | `car_client.py` | Talks to the car: picar_base's moves and camera head, the distance sensor |
 | `camera.py` | Gets the camera's newest picture (never an old one) and turns it into the model's picture |
 | `car_config.py` | Reads the car's numbers from its settings file, the same one picar_base uses |
 | `prompt.py` | What the AI is told: its tools, the car (with its numbers) and how to drive |
 | `history.py` | Keeps the conversation short enough for the model's context |
 | `.env.example` | The settings: which AI to use, its key, and which car. Copy it to `.env` |
-| `test/` | The tests (`python3 -m pytest test`, in `~/rai_venv` with ROS sourced) and, in `test/twin/`, the stand-ins for the twin |
+| `test/` | The tests (`python3 -m pytest test`, in `~/rai_venv` with ROS sourced); `test/twin/`: the stand-ins for the twin; `test/real/`: checks with the real model on saved car pictures |
 
 ## What it needs
 
-With the real car, the agent runs on a laptop on the car's Wi-Fi, not on the Pi (the Pi
-3B+ has too little memory): the Pi only runs the car's nodes. One command at the repo root
+With the real car, the agent runs on a PC or laptop on the car's Wi-Fi, not on the Pi (the Pi
+3B+ has too little memory): the Pi only runs the car's nodes. (In 2026 it runs on Ferenc's PC,
+in a WSL Ubuntu 22.04 with ROS 2 Humble, with the model in Ollama on Windows.) One command at the repo root
 installs everything below: `./setup_laptop.sh` on Fedora (it puts ROS and the agent in an
 Ubuntu 22.04 distrobox, and installs Ollama with the model), or `./setup_car.sh laptop`
 on Ubuntu 22.04. The laptop runs ROS 2 Humble like the car's Pi, so the two surely
@@ -117,8 +125,12 @@ per move, speed limit), so the AI cannot drive the car into a wall.
   the stop distance come from its `picar_base` section, so the agent and picar_base
   always agree; the size, the turning, the camera and the floor distances from its
   `picar_agent` section. The twin's are in `picar_base/config/sim.yaml` (measured in the
-  twin), the real car's in `picar/picar_car/config/car.yaml` (the twin's for now:
-  measure them on the car).
+  twin), the real car's in `picar/picar_car/config/car.yaml` (speeds, steering, turns and the
+  camera's width measured on the car; the floor table not yet, so `floor_measured: false`
+  keeps it out of what the AI is told).
 - What the AI is told about the car and how to drive: `picar_prompt()` in `prompt.py`
+- What the tools ask the vision model: `questions.py`. Check a change with the real model:
+  `test/real/check_pictures.py` (see `test/real/README.md`)
+- When approach counts as arrived: `approach.py`, whose docstring lists the rules in order
 - Another sensor for the AI: read its topic in `car_client.py`, like `range_ahead()` does,
   and use it in a tool in `picar_tools.py`

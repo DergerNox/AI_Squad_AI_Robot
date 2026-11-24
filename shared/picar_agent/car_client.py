@@ -80,25 +80,27 @@ class CarClient:
         .reason is done, obstacle, no_range, timeout, estop or busy, and .min_range_m the
         closest distance reading during the move. Forward and reverse use the car's own
         power, turns (steering of TURNING x max_steering_deg or more, either way) the turn power;
-        a move longer than picar_base allows at once (max_move_s) goes in parts."""
+        a move longer than picar_base allows at once (max_move_s) goes in parts. Every part is
+        car.start_lag_s longer: the time the motors take to get the car rolling."""
         self.look_ahead()
         car = self.car
         power, speed = (car.power, car.speed_mps) if distance >= 0 else (car.reverse_power, car.reverse_speed_mps)
         if abs(steering) >= TURNING * car.max_steering_deg and car.turn_power:
             power, speed = car.turn_power, car.turn_speed_mps or speed
-        left = abs(distance) / speed   # seconds still to drive
+        lag = car.start_lag_s
+        left = abs(distance) / speed   # seconds of rolling still to drive
         went = 0.0
         while True:
-            duration = min(left, car.max_move_s)
+            duration = min(left + lag, car.max_move_s)
             # picar_base takes the speed as a fraction of its max_speed
             request = {"speed": math.copysign(power / car.max_speed, distance), "steering_deg": steering,
                        "duration_s": duration}
             start = self.clock.monotonic()
             answer = self.call("/picar/move", "picar_interfaces/srv/Move", request,
                                timeout_sec=duration + 5.0).payload
-            # No wheel encoders: work out how far it went from the time it drove.
-            went += speed * min(duration, self.clock.monotonic() - start)
-            left -= duration
+            # No wheel encoders: work out how far it went from the time it drove, after the start-up
+            went += speed * max(0.0, min(duration, self.clock.monotonic() - start) - lag)
+            left -= duration - lag
             if answer is None or answer.reason != "done" or left < 1e-3:
                 break
         driven = math.copysign(min(abs(distance), went), distance)
