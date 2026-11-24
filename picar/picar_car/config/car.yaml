@@ -34,7 +34,9 @@ picar_base:
     cmd_timeout_s: 0.5
     obstacle_stop_m: 0.25
     range_timeout_s: 0.3
-    max_pan_deg: 90.0
+    # the head's servo limits (hw.pan_limits) are about 60 left, 50 right, but at -50 (420 steps) the
+    # pan servo pushed against its end and strained (2026-11-24): the tools stay within 40
+    max_pan_deg: 40.0
     max_tilt_deg: 40.0
     # The hw backend (picar_car/hw_backend.py). The values are the team's, from
     # picar_control/motor_steering_node.py, which drives this car. Decimals stay decimals.
@@ -50,9 +52,13 @@ picar_base:
       i2c_bus: 1
       pca9685_address: 64            # 0x40
       steering_channel: 2
-      steering_centre: 300
+      # Straight ahead. The team's 300 pulled right (about 35 deg per metre, 2026-11-20); measured
+      # with 1 s drives: 291 about 3 deg right per 0.2 m, 285 about 2, 281 about 1.5
+      steering_centre: 281
       steering_full_left: 242        # at +max_steering_deg
-      steering_full_right: 350       # at -max_steering_deg
+      # at -max_steering_deg. 50 steps right of the centre, as the team had it (300 + 50): with the
+      # centre at 281, 350 pushed the wheels against their end and right turns hardly moved (2026-11-24)
+      steering_full_right: 331
       pan_channel: 6
       pan_centre: 311
       pan_per_deg: 2.2               # measure: steps per degree (negative turns the other way)
@@ -84,12 +90,23 @@ picar_agent:
     reverse_power: 0.5
     forward_speed_mps: 0.22
     reverse_speed_mps: 0.16
+    # Turns (three quarters of full steering or more) drive at their own power: at full lock the
+    # wheels barely roll at 0.5 (1 s: 3 cm, 5 deg). At 0.6, 1.5 s turned about 30-40 deg and rolled
+    # about 0.15-0.2 m (left; right the same once steering_full_right was 331), 2026-11-24.
+    turn_power: 0.6
+    turn_speed_mps: 0.12
+    # approach looks again after at most this far: a 0.6 m step lost the white bed when the car
+    # pulled to one side (2026-11-20). The twin leaves it out: its longest drive.
+    approach_step_m: 0.3
     length_m: 0.22
     width_m: 0.10
     turn_deg_per_m: 200.0     # measure: heading change per metre at full steering
     head_deg_per_s: 150.0     # measure: how fast the camera head turns
     camera_height_m: 0.17
-    camera_fov_deg: 62.0      # measure: how wide the picture is
+    # How wide the picture is: the OV5647 (Camera Module 1) sees 53.5 degrees across its whole
+    # sensor, and camera_ros's 640x480 uses 2560 of its 2592 pixels (read from the sensor while
+    # streaming, 2026-11-24): about 53 degrees. The twin's camera is 62.
+    camera_fov_deg: 53.0
     # With tilt 0: how far down the picture an object touches the floor (0.5 = the middle
     # row, 1.0 = the bottom edge), and how far from the bumper it is then. Measure on the car.
     floor_rows: [1.0, 0.9, 0.8, 0.75, 0.7, 0.65, 0.6]

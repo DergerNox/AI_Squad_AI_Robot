@@ -369,14 +369,15 @@ def test_picar_base_drives_through_it_with_car_yaml(monkeypatch):
         node = PicarBase()
         backend = node.backend
         assert isinstance(backend, HwBackend)
-        assert backend.steering_left == 242
+        # full right 50 steps from the centre: at 350 (69) right turns hardly moved (2026-11-24)
+        assert (backend.steering_left, backend.steering_centre, backend.steering_right) == (242, 281, 331)
         assert (backend.pan_limits, backend.watchdog_s) == ([180, 420], 0.5)
         node.on_range(Range(range=2.0))
         node.on_cmd_vel(Twist(linear=Vector3(x=0.1), angular=Vector3(z=0.3)))
         node.loop()
         assert gpio.pwms[A_ENABLE].duty == pytest.approx(20.0)     # 0.2 of full power: min_duty 0
         steering = math.degrees(math.atan(0.145 * 0.3 / 0.1))
-        assert bus.servo(STEERING) == round(300 - 58 * steering / 30)
+        assert bus.servo(STEERING) == round(281 - (281 - 242) * steering / 30)   # car.yaml's centre
     finally:
         if node is not None:
             node.backend.close()

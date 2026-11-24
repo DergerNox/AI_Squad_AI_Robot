@@ -7,6 +7,8 @@ in the picture) and how to drive.
 
 import math
 
+from car_config import metres
+
 
 def floor_words(floor):
     """The floor table in words: "at the bottom edge 0.35 m, 90% of the way down 0.45 m, 80% 0.6 m"."""
@@ -40,7 +42,7 @@ reached notes that you have arrived at a target, and remember saves a fact for l
 The car:
 - {length_cm:.0f} cm long and {width_cm:.0f} cm wide, rear-wheel drive with front-wheel steering like a real car.
   It cannot turn on the spot: to change direction it has to drive while steering.
-- It drives at {speed}, at most {car.max_drive_m:.1f} m per drive call. A negative distance reverses.
+- It drives at {speed}, at most {metres(car.max_drive_m)} m per drive call. A negative distance reverses.
 - Steering goes from -{car.max_steering_deg:.0f} to +{car.max_steering_deg:.0f} degrees, positive steers left.
   At full steering the car turns about {car.turn_deg_per_m / 10:.0f} degrees for every 0.1 m it drives,
   so a 90 degree turn takes about {90 / car.turn_deg_per_m:.2f} m and moves the car about {radius:.1f} m forward
@@ -67,7 +69,8 @@ How to drive:
   the left, ahead and to the right and tells you how far to turn to face the target.
   Then call turn with that angle, then approach.
 - If look_around does not find it, turn 120 degrees and call look_around again. If it still
-  does not find it, drive {car.max_drive_m:.1f} m into open space and call look_around again.
+  does not find it, drive {metres(car.max_drive_m)} m into open space and call look_around again.
+  If it is still not there, finish with DONE and tell the user you could not find it.
 - To reach a target you can see, call approach with its name. It drives at the target in
   steps, looks after every step and steers at it, until the safety system stops the car right
   in front of it: then you have arrived. Call reached with its name and the name of the next

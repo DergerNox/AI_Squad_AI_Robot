@@ -52,7 +52,34 @@ def test_the_real_car_starts_with_the_twins_numbers():
                  if getattr(twin, field.name) != getattr(real, field.name)}
     assert different == {"file", "description", "own_parts", "camera_topic",   # until it is measured
                          "speed_mps", "reverse_speed_mps", "max_speed",    # measured 2026-11-17
-                         "power", "reverse_power"}
+                         "power", "reverse_power", "max_pan_deg",
+                         "approach_step_m", "camera_fov_deg",               # 2026-11-24
+                         "turn_power", "turn_speed_mps"}
+
+
+def test_the_real_car_looks_again_after_shorter_approach_steps():
+    # a 0.6 m step lost the white bed when the car pulled to one side (2026-11-20)
+    twin, real = car_config.load_car(str(TWIN_FILE)), car_config.load_car(str(REAL_FILE))
+    assert twin.approach_step_m is None and twin.approach_max_m == pytest.approx(twin.max_drive_m)
+    assert real.approach_max_m == pytest.approx(0.3)
+    assert dataclasses.replace(real, approach_step_m=5.0).approach_max_m == pytest.approx(real.max_drive_m)
+
+
+def test_turns_drive_at_their_own_power_on_the_real_car_only():
+    # at full lock the real car's wheels barely rolled at 0.5 (2026-11-24)
+    twin, real = car_config.load_car(str(TWIN_FILE)), car_config.load_car(str(REAL_FILE))
+    assert (twin.turn_power, twin.turn_speed_mps) == (twin.power, twin.speed_mps)
+    assert (real.turn_power, real.turn_speed_mps) == (0.6, 0.12)
+
+
+def test_a_turn_power_without_a_measured_speed_scales_the_full_speed(tmp_path):
+    car = car_config.load_car(settings_with(tmp_path, lambda s: agent(s).update(turn_power=0.2)))
+    assert car.turn_power == 0.2 and car.turn_speed_mps == pytest.approx(0.1)   # 0.5 m/s x 0.2
+
+
+def test_the_real_cars_camera_is_about_53_degrees_wide():
+    # the OV5647 sees 53.5 degrees; camera_ros's 640x480 uses 2560 of its 2592 pixels (2026-11-24)
+    assert car_config.load_car(str(REAL_FILE)).camera_fov_deg == 53.0
 
 
 def test_the_real_car_uses_its_measured_speeds():
@@ -134,6 +161,9 @@ def base(settings):
     (lambda s: agent(s).update(forward_power=0), "forward_power must be a number more than 0"),
     (lambda s: agent(s).update(forward_power="slow"), "forward_power must be a number"),
     (lambda s: agent(s).update(reverse_speed_mps=0), "reverse_speed_mps must be a speed in m/s, more than 0"),
+    (lambda s: agent(s).update(approach_step_m=0), "approach_step_m must be a length in metres, more than 0"),
+    (lambda s: agent(s).update(turn_power=0.9), r"turn_power must be a number more than 0 and at most"),
+    (lambda s: agent(s).update(approach_step_m="short"), "approach_step_m must be a length in metres"),
 ])
 def test_mistakes_in_the_settings_say_what_to_fix(tmp_path, change, message):
     with pytest.raises(car_config.CarConfigError, match=message):
@@ -177,6 +207,13 @@ def test_the_prompt_says_how_to_just_look_and_to_stop_at_the_emergency_stop():
     assert "If the user only asks what you see, or to look around without naming a target, do not drive" in prompt
     assert "look_around is only for finding a target." in prompt
     assert "If a tool says the emergency stop is on, stop at once: finish with DONE" in prompt
+
+
+def test_the_real_cars_prompt_gives_its_own_limits():
+    prompt = words(picar_prompt(car_config.load_car(str(REAL_FILE))))
+    assert "at most 0.66 m per drive call" in prompt   # as exact as drive uses it (was "0.7")
+    assert "Pan goes from -40 to 40 degrees" in prompt  # at -50 the pan servo strained (was 90, then 50)
+    assert "finish with DONE and tell the user you could not find it" in prompt
 
 
 def test_the_real_cars_prompt_does_not_mention_gazebo():

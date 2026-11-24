@@ -10,7 +10,9 @@ From the file's picar_base section it takes the speed, the limits and the stop d
 Its picar_agent section holds what only the AI needs: how the car is described, its
 size, how sharply it turns, the camera, and how far away the floor is in the picture,
 and the motor power it drives with forward and in reverse (both picar_base's max_speed
-when left out), with the speeds measured at those powers (else full_speed_mps x power).
+when left out), with the speeds measured at those powers (else full_speed_mps x power), and
+the longest step approach drives between two looks (else the longest drive), and the power
+and speed of turns (drives at three quarters of full steering or more; else the forward ones).
 """
 
 import os
@@ -59,11 +61,26 @@ class Car:
     floor: tuple              # (row, distance_m) pairs: see floor_rows in sim.yaml
     own_parts: str            # what the camera may see of the car itself
     camera_topic: str = "/camera/image_raw"   # .../compressed: JPEGs (the real car, over Wi-Fi)
+    approach_step_m: float = None   # approach's longest step between two looks; None: max_drive_m
+    # Turns (steering of TURNING x max_steering_deg or more): at full lock the real car's wheels
+    # barely roll at the forward power (2026-11-24). None: the forward power and speed.
+    turn_power: float = None
+    turn_speed_mps: float = None
 
     @property
     def max_drive_m(self):
         """The longest drive in one move."""
         return self.speed_mps * self.max_move_s
+
+    @property
+    def approach_max_m(self):
+        """The longest step approach drives before it looks again."""
+        return min(self.max_drive_m, self.approach_step_m or self.max_drive_m)
+
+
+def metres(value):
+    """A distance for the AI's texts, as exact as the tools use it: 0.66, not 0.7."""
+    return f"{round(value, 2):g}"
 
 
 def ros_share(package):
@@ -113,6 +130,9 @@ def load_car(spec=None, share=ros_share):
     # far from proportional to power (2026-11-17)
     speed = optional_speed(agent, "forward_speed_mps", full * power, path)
     reverse_speed = optional_speed(agent, "reverse_speed_mps", full * reverse_power, path)
+    turn_power = optional_power(agent, "turn_power", most, path) if "turn_power" in agent else power
+    turn_speed = optional_speed(agent, "turn_speed_mps", full * turn_power if "turn_power" in agent else speed,
+                                path)
 
     return Car(
         file=path,
@@ -136,6 +156,9 @@ def load_car(spec=None, share=ros_share):
         floor=tuple(zip(rows, distances)),
         own_parts=text(agent, "own_parts", path),
         camera_topic=topic(agent, "camera_topic", path, Car.camera_topic),
+        approach_step_m=optional_length(agent, "approach_step_m", path),
+        turn_power=turn_power,
+        turn_speed_mps=turn_speed,
     )
 
 
@@ -170,6 +193,17 @@ def optional_speed(params, name, default, path):
     value = params.get(name, default)
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
         raise CarConfigError(f"{path}: picar_agent's {name} must be a speed in m/s, more than 0, "
+                             f"not {value!r}")
+    return float(value)
+
+
+def optional_length(params, name, path):
+    """A length in metres from the picar_agent section, more than 0; None if left out."""
+    value = params.get(name)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise CarConfigError(f"{path}: picar_agent's {name} must be a length in metres, more than 0, "
                              f"not {value!r}")
     return float(value)
 

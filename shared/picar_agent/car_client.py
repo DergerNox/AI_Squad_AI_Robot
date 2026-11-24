@@ -31,6 +31,11 @@ def clamp(value, low, high):
     return max(low, min(high, float(value)))
 
 
+# A drive steering at least this part of full steering is a turn: at full lock the real car's
+# wheels barely rolled at the forward power (1 s: 3 cm, 5 degrees; 2026-11-24)
+TURNING = 0.75
+
+
 class CarClient:
     """One car: connector is RAI's ROS2Connector, car the car's numbers (car_config.Car),
     clock the time module (or a stand-in for it in the tests)."""
@@ -74,10 +79,13 @@ class CarClient:
         went (metres, negative backward) and picar_base's answer (None if it did not answer):
         .reason is done, obstacle, no_range, timeout, estop or busy, and .min_range_m the
         closest distance reading during the move. Forward and reverse use the car's own
-        power; a move longer than picar_base allows at once (max_move_s) goes in parts."""
+        power, turns (steering of TURNING x max_steering_deg or more, either way) the turn power;
+        a move longer than picar_base allows at once (max_move_s) goes in parts."""
         self.look_ahead()
         car = self.car
         power, speed = (car.power, car.speed_mps) if distance >= 0 else (car.reverse_power, car.reverse_speed_mps)
+        if abs(steering) >= TURNING * car.max_steering_deg and car.turn_power:
+            power, speed = car.turn_power, car.turn_speed_mps or speed
         left = abs(distance) / speed   # seconds still to drive
         went = 0.0
         while True:

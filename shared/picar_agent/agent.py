@@ -91,7 +91,7 @@ class PicarAgent(BaseAgent):
                 SystemMessage(content=f"{self.prompt}\nWhat you remember from earlier tasks:\n{notes}"),
                 HumanMessage(content=text),
             ])
-            self.new_task()   # forget the targets reached in the last task
+            self.new_task(text)   # forget the targets reached in the last task; a new picture folder
             # Each tool call takes two steps; LangGraph's default limit of 25 is too few.
             config = RunnableConfig(callbacks=self.callbacks, recursion_limit=100)
             try:

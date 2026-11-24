@@ -62,6 +62,8 @@ def answer(question, b64):
     if mask is None:
         return "white wall"
     width = mask.shape[1]
+    if "the same" in question and "Is it the" not in question:   # picar_tools.SAME: a cut-out
+        return "yes" if mask.mean() > 0.08 else "no"
     if "Is it the" in question:   # what the car has stopped in front of
         middle = mask[:, width // 3: 2 * width // 3]
         return f"yes, {colour} object" if middle.mean() > 0.08 else "no, white wall"
@@ -87,4 +89,5 @@ class ColourVision:
         message = messages[0]
         question = message.content if isinstance(message.content, str) else " ".join(
             part.get("text", "") for part in message.content if isinstance(part, dict))
-        return type("Answer", (), {"content": answer(question, message.images[0])})()
+        # with two pictures (a first sighting, then the picture now) the question is about the last
+        return type("Answer", (), {"content": answer(question, message.images[-1])})()
