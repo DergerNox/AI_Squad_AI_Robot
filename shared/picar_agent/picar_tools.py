@@ -4,6 +4,7 @@ drive        drives forward or backward with a steering angle, then takes a pict
 turn         turns the car by an angle (a drive at full steering), then takes a picture
 look         points the camera and takes a picture
 look_around  looks left, ahead and right for a target and says how far to turn to face it
+explore      drives around, looks ahead, left and right at each stop, and lists what it saw
 approach     drives to a target it can see in steps, looking and steering after each step
 reached      notes that the car has arrived at one of the targets
 remember     saves a fact for later tasks (in memory.json)
@@ -38,10 +39,11 @@ from rai.communication.ros2 import ROS2Connector
 
 from approach import (APPROACH_CLOSE_M, APPROACH_MAX_STEPS, LOOK_DOWN_DEG,  # noqa: F401 (the tests)
                       SIDE_OFFSET_DEG, Approach)
+from camera import CAMERA_DOWN, CameraDown
 from car_client import CarClient, clamp
 from car_config import load_car, metres
 from eyes import Eyes
-from moves import ESTOP, MIN_MOVE_M, Moves, finished
+from moves import ESTOP, MIN_MOVE_M, NO_ECHO, NOT_MOVING, TURN_STUCK, Moves, finished
 from picture_log import PictureLog
 from picture_math import both, cut_out, floor_distance  # noqa: F401 (the tests)
 from questions import (CLOSE_UP, DESCRIBE, IN_FRONT, LOCATE, NAME_CROP, NAME_IT,  # noqa: F401
@@ -51,6 +53,16 @@ from task_state import BACK_UP_M, TaskState
 # Next to agent.py, from whichever folder the agent is started
 MEMORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory.json")
 DESCRIBE_PANS = ((0, "ahead"), (45, "to the left"), (-45, "to the right"))
+# explore: "drive around and tell me what you saw" (Ferenc, 2026-11-25). Between its stops it drives
+# on where the distance sensor sees the way free, else turns left; it never reverses.
+EXPLORE_STEPS = 4         # stops when the user does not say
+EXPLORE_MAX_STOPS = 8
+EXPLORE_STEP_M = 0.5      # how far it drives on between stops
+EXPLORE_FREE_M = 1.0      # ... when the sensor sees at least this much free (step + stop + margin)
+EXPLORE_TURN_DEG = 90     # else it turns this far left
+# What ends exploring early: the car cannot or should not move on
+EXPLORE_ENDS = (ESTOP, NOT_MOVING.split(":")[0], TURN_STUCK.split(":")[0].strip(), NO_ECHO.split(":")[0],
+                CAMERA_DOWN, "picar_base did not answer")
 
 
 def look_around_pans(max_pan):
@@ -126,6 +138,16 @@ pan_deg 0 and tilt_deg 0 look straight ahead.""")
         pictures.save(picture, "look, shown to the AI", answer=text + task.status_note())
         return text + task.status_note(), picture
 
+    def describe_around(label=""):
+        """What the camera sees ahead, to the left and to the right: [(side, words)]."""
+        seen = []
+        for pan, side in DESCRIBE_PANS:
+            client.point_camera(pan, 0)
+            answer = ask_about(client.take_picture(), DESCRIBE, f"{label}camera {side}", limit=160)
+            seen.append((side, answer or "nothing clear"))
+        client.point_camera(0, 0)
+        return seen
+
     @tool(response_format="content_and_artifact")
     def look_around(target: str):
         """Search for a target with the camera, without moving the car. The camera looks
@@ -135,13 +157,8 @@ pan_deg 0 and tilt_deg 0 look straight ahead.""")
         """
         target = target.strip().lower()
         if no_target(target):
-            seen = []
-            for pan, side in DESCRIBE_PANS:
-                client.point_camera(pan, 0)
-                answer = ask_about(client.take_picture(), DESCRIBE, f"camera {side}", limit=160)
-                seen.append(f"{side}: {answer or 'nothing clear'}")
-            client.point_camera(0, 0)
-            text = ("No target was named, so the camera described what it sees: " + "; ".join(seen)
+            seen = "; ".join(f"{side}: {words}" for side, words in describe_around())
+            text = ("No target was named, so the camera described what it sees: " + seen
                     + ". Do not drive: answer the user now, starting with DONE, with what you saw.")
             return text, client.take_picture()
         if target in task.reached:
@@ -242,6 +259,39 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
         return picture_with_notes(text)
 
     @tool(response_format="content_and_artifact")
+    def explore(stops: int = EXPLORE_STEPS):
+        """Drive around and see what is there. At each stop the camera looks ahead, to the left
+        and to the right; between stops the car drives on about 0.5 m where the way ahead is free,
+        or turns 90 degrees left where it is not. You get what the camera saw at every stop.
+
+        stops: how many places to look from, 1 to 8 (4 if the user did not say).
+        """
+        stops = int(clamp(stops, 1, EXPLORE_MAX_STOPS))
+        notes, ended = [], ""
+        for n in range(1, stops + 1):
+            seen = describe_around(f"explore, stop {n}, ")
+            notes.append(f"Stop {n}: " + "; ".join(f"{side}: {words}" for side, words in seen) + ".")
+            if n == stops:
+                break
+            ahead = client.range_ahead()
+            try:
+                if ahead is not None and ahead >= EXPLORE_FREE_M:
+                    text, _ = drive.func(EXPLORE_STEP_M)
+                    notes.append(f"Then drove on {EXPLORE_STEP_M:g} m.")
+                else:
+                    text, _ = turn.func(EXPLORE_TURN_DEG)
+                    notes.append(f"The way ahead was not free, so it turned {EXPLORE_TURN_DEG} degrees left.")
+            except CameraDown as error:
+                text = str(error)
+            if any(end in text for end in EXPLORE_ENDS):
+                ended = f" It stopped exploring early: {text}"
+                break
+        text = (f"Explored from {sum(note.startswith('Stop') for note in notes)} stops. What the camera saw: "
+                + " ".join(notes) + ended + " Now answer the user, starting with DONE, with a short summary "
+                "of what you saw (the main things and where, not every detail).")
+        return text + task.status_note(), client.take_picture()
+
+    @tool(response_format="content_and_artifact")
     def approach(target: str):
         """Drive to a target you can see, until the safety system stops the car right in
         front of it or the camera shows it right in front. It drives in steps, looks after
@@ -312,4 +362,4 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
         save_memory(memory, memory_file)
         return "Saved."
 
-    return [drive, turn, look, look_around, approach, reached, remember], start_task, memory
+    return [drive, turn, look, look_around, explore, approach, reached, remember], start_task, memory

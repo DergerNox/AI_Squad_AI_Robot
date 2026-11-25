@@ -236,6 +236,12 @@ def test_the_prompt_says_how_to_just_look_and_to_stop_at_the_emergency_stop():
     assert "If a tool says the emergency stop is on, stop at once: finish with DONE" in prompt
 
 
+def test_the_prompt_says_when_to_explore():
+    prompt = words(picar_prompt(car_config.load_car(str(TWIN_FILE))))
+    assert "explore drives around and tells you what the camera saw" in prompt
+    assert "If the user asks you to drive around (explore the room, see what is there), call explore once" in prompt
+
+
 def test_the_real_cars_prompt_gives_its_own_limits():
     prompt = words(picar_prompt(car_config.load_car(str(REAL_FILE))))
     assert "at most 0.74 m per drive call" in prompt   # as exact as drive uses it (was "0.7")

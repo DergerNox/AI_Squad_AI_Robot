@@ -1073,6 +1073,41 @@ def test_names_allow_a_typo_a_plural_and_a_family(name, target, right):
     assert picar_tools.names_target(name, target) == right
 
 
+# ---------- explore ----------
+
+def test_explore_looks_around_at_every_stop_and_drives_on_where_free(tools, car, vision):
+    # "drive around and tell me what you saw" (Ferenc, 2026-11-25)
+    car.range_m = 2.0
+    vision.answers = ["a white bed", "a desk", "a door", "a red box", "a wall", "a chair"]
+    text = use(tools.explore, stops=2).content
+    assert car.moves == [move(1.0, 0.0, 0.5 / 0.2)]          # between the two stops only
+    assert ("Stop 1: ahead: a white bed; to the left: a desk; to the right: a door. Then drove on 0.5 m. "
+            "Stop 2: ahead: a red box; to the left: a wall; to the right: a chair.") in text
+    assert "answer the user, starting with DONE, with a short summary" in text
+    assert sum(q == picar_tools.DESCRIBE for q in vision.questions) == 6
+
+
+def test_explore_turns_left_where_the_way_is_not_free(tools, car, vision):
+    car.range_m = 0.6                                        # less than 1 m free: no drive on
+    text = use(tools.explore, stops=2).content
+    assert car.moves == [move(1.0, 30.0, 90 / 200 / 0.2)]     # a 90 degree turn left
+    assert "The way ahead was not free, so it turned 90 degrees left." in text
+
+
+def test_explore_stops_early_at_the_emergency_stop(tools, car, vision):
+    car.range_m = 2.0
+    car.results = [("estop", 0.0, 4.0)]
+    text = use(tools.explore, stops=4).content
+    assert len(car.moves) == 1 and "Stop 2" not in text
+    assert "It stopped exploring early" in text and "The emergency stop is on" in text
+
+
+def test_explore_looks_from_at_most_8_stops(tools, car, vision):
+    car.range_m = 2.0
+    use(tools.explore, stops=20)
+    assert len(car.moves) == 7
+
+
 # ---------- approach ----------
 
 @pytest.mark.parametrize("range_m, step_m", [

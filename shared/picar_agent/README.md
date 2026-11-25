@@ -11,7 +11,7 @@ the real car through the same ROS 2 names.
 |---|---|
 | `agent.py` | The loop: the conversation, your input and its answers |
 | `llm.py` | The AI model chosen in `.env` (Ollama, OpenAI or Gemini) |
-| `picar_tools.py` | The tools: drive, turn, look, look_around, approach, reached, remember |
+| `picar_tools.py` | The tools: drive, turn, look, look_around, explore, approach, reached, remember |
 | `approach.py` | approach's steps, and its rules for "arrived" (listed at the top of the file) |
 | `eyes.py` | The tools' questions about pictures, and the first sighting of each target to compare with |
 | `questions.py` | The question texts the vision model gets, and how its answers are read |

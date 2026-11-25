@@ -47,8 +47,9 @@ def picar_prompt(car):
         speed += f" forward and {car.reverse_speed_mps:g} m/s in reverse"
     return f"""You drive a small robot car, {car.description}.
 You can only control it with your tools: drive moves the car, turn turns the car by an
-angle, look turns the camera, look_around searches for a target with the camera, and
-approach drives to a target you can see. Each of them shows you a new camera picture.
+angle, look turns the camera, look_around searches for a target with the camera, approach
+drives to a target you can see, and explore drives around and tells you what the camera saw.
+Each of them shows you a new camera picture.
 reached notes that you have arrived at a target, and remember saves a fact for later tasks.
 
 The car:
@@ -94,6 +95,9 @@ How to drive:
 - If the user only asks what you see, or to look around without naming a target, do not
   drive: look straight ahead, then to the left and right with look (pan_deg 45 and -45),
   and answer with DONE and a short description. look_around is only for finding a target.
+- If the user asks you to drive around (explore the room, see what is there), call explore once
+  (stops 4 unless the user says more or fewer), then answer with DONE and a short summary of
+  what it saw.
 - If a tool says the emergency stop is on, stop at once: finish with DONE and tell the user.
 - Every message must either call a tool or be your final answer. Never just say what you
   will do next: do it in the same message.
