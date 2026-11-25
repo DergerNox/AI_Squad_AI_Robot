@@ -32,7 +32,9 @@ car's numbers, prompt.py tells the AI about the car, history.py keeps the conver
 import json
 import math
 import os
+import re
 import time
+from datetime import datetime
 
 from langchain_core.tools import tool
 from rai.communication.ros2 import ROS2Connector
@@ -61,6 +63,24 @@ EXPLORE_STEP_M = 0.5      # how far it drives on between stops
 EXPLORE_FREE_M = 1.0      # ... when the sensor sees at least this much free (step + stop + margin)
 EXPLORE_TURN_DEG = 90     # else it turns this far, towards the side with more free floor (left if unsure)
 DESCRIBE_LIMIT = 200      # characters of a description (they are one short sentence)
+SEEN_LIMIT = 300          # characters of the fact explore saves for later tasks
+# Where a description's things end: "a white bed with a beige sheet is far, while a blue box ..."
+THING_ENDS = re.compile(r"\s(?:is|are|lies|lie|sits|sit|rests|rest|stands|stand|hangs|hang|dominates|"
+                        r"dominate|appears|appear|covers|cover)\b")
+
+
+def main_things(description):
+    """The things a description names: "a white bed with a beige sheet is far, while a blue box
+    and black clothes are near" -> ["a white bed with a beige sheet", "a blue box and black clothes"]."""
+    things = []
+    for part in re.split(r",?\s+while\s+|;\s*|,\s+and\s+|,\s+with\s+", description):
+        thing = THING_ENDS.split(part, maxsplit=1)[0].strip(" .,")
+        thing = re.sub(r",?\s+(?:near|far|close|nearby)$", "", thing)
+        if thing and thing not in ("nothing clear",):
+            things.append(thing)
+    return things
+
+
 # What ends exploring early: the car cannot or should not move on
 EXPLORE_ENDS = (ESTOP, NOT_MOVING.split(":")[0], TURN_STUCK.split(":")[0].strip(), NO_ECHO.split(":")[0],
                 CAMERA_DOWN, "picar_base did not answer")
@@ -295,7 +315,11 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
         stops = int(clamp(stops, 1, EXPLORE_MAX_STOPS))
         target = target.strip().lower()
         if no_target(target):
-            target = ""
+            # In the middle of a search, explore looks for that target: on the real car the AI called
+            # explore without one while finding the black slipper, saw it in a description, and never
+            # drove to it (2026-11-25)
+            searching = task.target_now()
+            target = searching if searching and searching not in task.reached else ""
         elif target in task.reached:
             return (f"You already reached the {target}. Do not look for it again: look for the next"
                     f" target.{task.status_note()}", client.take_picture())
@@ -342,11 +366,29 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
             text = (f"Explored from {stopped_at} stops looking for the {target}: not seen. " + " ".join(notes)
                     + ended + f" Finish with DONE and tell the user you could not find the {target}.")
             return text + task.status_note(), client.take_picture()
+        keep_seen(notes)
         text = (f"Explored from {stopped_at} stops. What the camera saw: " + " ".join(notes) + ended
-                + " Now answer the user, starting with DONE, with a short summary of what you saw (the main"
-                " things and where, not every detail). Then save the two or three most useful findings"
-                " with remember, for example 'the blue box is next to the radiator'.")
+                + " The main things are saved for later tasks. Now answer the user, starting with DONE, with"
+                " a short summary of what you saw (the main things and where, not every detail).")
         return text + task.status_note(), client.take_picture()
+
+    def keep_seen(notes):
+        """Save what exploring saw as one fact for later tasks: the AI was asked to, wrote "I remember
+        ..." in its answer and never called remember (real car, 2026-11-25)."""
+        things = []
+        for note in notes:
+            for description in re.findall(r"(?:ahead|to the left|to the right): ([^;]+?)(?:;|\.$)", note):
+                for thing in main_things(description):
+                    if thing.lower() not in (t.lower() for t in things):
+                        things.append(thing)
+        if things:
+            day = datetime.fromtimestamp((clock or time).time()).strftime("%Y-%m-%d")
+            keep_fact(f"Seen while exploring on {day}: " + ", ".join(things))
+
+    def keep_fact(fact):
+        memory.append(fact[:SEEN_LIMIT])
+        del memory[:-20]   # keep the newest 20
+        save_memory(memory, memory_file)
 
     @tool(response_format="content_and_artifact")
     def approach(target: str):
@@ -414,9 +456,7 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
     @tool
     def remember(fact: str):
         """Save one short fact for later tasks, for example where you found something."""
-        memory.append(fact)
-        del memory[:-20]   # keep the newest 20
-        save_memory(memory, memory_file)
+        keep_fact(fact)
         return "Saved."
 
     return [drive, turn, look, look_around, explore, approach, reached, remember], start_task, memory

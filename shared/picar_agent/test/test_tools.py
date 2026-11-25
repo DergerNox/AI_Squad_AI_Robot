@@ -11,6 +11,7 @@ import io
 import json
 import math
 import pathlib
+from datetime import datetime
 from types import SimpleNamespace
 
 import numpy as np
@@ -1149,6 +1150,38 @@ def test_explore_with_a_target_turns_by_its_side_pictures(car, vision):
     vision.answers = ["no", "no", "no", "second", "first"]   # not seen; then the right side is freer
     use(tools.explore, stops=2, target="red box")
     assert car.moves[0]["steering_deg"] == -30.0
+
+
+def test_explore_saves_the_main_things_it_saw_for_later_tasks(tools, car, vision):
+    # the AI wrote "I remember ..." and never called remember (real car, 2026-11-25)
+    car.range_m = 2.0
+    vision.answers = ["a white bed with a beige sheet is far, while a blue box and black clothes are near",
+                      "a wooden dresser is near", "a white bed is far, while a radiator is near"]
+    text = use(tools.explore, stops=1).content
+    assert "The main things are saved for later tasks." in text
+    day = datetime.fromtimestamp(car.clock.time()).strftime("%Y-%m-%d")   # the fake clock's day, here
+    assert picar_tools.load_memory()[-1] == (f"Seen while exploring on {day}: a white bed with a beige sheet, "
+                                             "a blue box and black clothes, a wooden dresser, a white bed, a radiator")
+
+
+@pytest.mark.parametrize("description, things", [
+    ("a white bed with a beige sheet is far, while a blue box and black clothes are near on the floor",
+     ["a white bed with a beige sheet", "a blue box and black clothes"]),
+    ("a black slipper with white patterns rests near the floor, while a white drawer is farther back",
+     ["a black slipper with white patterns", "a white drawer"]),
+    ("a white cabinet door, near, and a dark brown floor, far", ["a white cabinet door", "a dark brown floor"]),
+])
+def test_the_things_a_description_names(description, things):
+    assert picar_tools.main_things(description) == things
+
+
+def test_explore_without_a_target_during_a_search_looks_for_that_target(tools, car, vision):
+    # the AI called explore without the black slipper while finding it (real car, 2026-11-25)
+    car.range_m = 2.0
+    use(tools.look_around, target="red box")              # the search: not seen
+    vision.answers = ["no", "no", "no", "no", "no", "middle"]
+    text = use(tools.explore, stops=3).content
+    assert text.startswith("Explored for the red box: at stop 2 it was seen")
 
 
 def test_explore_looks_from_at_most_8_stops(tools, car, vision):
