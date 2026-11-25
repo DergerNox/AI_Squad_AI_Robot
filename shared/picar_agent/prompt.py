@@ -80,7 +80,7 @@ How to drive:
   the left, ahead and to the right and tells you how far to turn to face the target.
   Then call turn with that angle, then approach.
 - If look_around does not find it, turn 120 degrees and call look_around again. If it still
-  does not find it, drive {metres(car.max_drive_m)} m into open space and call look_around again.
+  does not find it, call explore with the target: it drives around the room and looks for it.
   If it is still not there, finish with DONE and tell the user you could not find it.
 - To reach a target you can see, call approach with its name. It drives at the target in
   steps, looks after every step and steers at it, until the safety system stops the car right

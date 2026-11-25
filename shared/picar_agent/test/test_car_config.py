@@ -224,7 +224,7 @@ def test_the_twins_prompt_has_its_numbers():
         "at the bottom edge 0.35 m, 90% of the way down 0.45 m, 80% 0.6 m, 75% 0.75 m, "
         "70% 0.9 m, 65% 1.25 m, 60% 1.9 m. The floor closer than 0.35 m is below the picture",
         "parts of your own car: black wheels, green body.",
-        "drive 0.6 m into open space",
+        "call explore with the target: it drives around the room and looks for it",
     ]:
         assert part in prompt
 

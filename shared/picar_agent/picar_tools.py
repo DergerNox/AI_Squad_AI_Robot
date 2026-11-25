@@ -46,7 +46,7 @@ from eyes import Eyes
 from moves import ESTOP, MIN_MOVE_M, NO_ECHO, NOT_MOVING, TURN_STUCK, Moves, finished
 from picture_log import PictureLog
 from picture_math import both, cut_out, floor_distance  # noqa: F401 (the tests)
-from questions import (CLOSE_UP, DESCRIBE, IN_FRONT, LOCATE, NAME_CROP, NAME_IT,  # noqa: F401
+from questions import (CLOSE_UP, DESCRIBE, FREER, IN_FRONT, LOCATE, NAME_CROP, NAME_IT,  # noqa: F401
                        SAME, boxes_in, names_target, no_target, says_no)
 from task_state import BACK_UP_M, TaskState
 
@@ -59,7 +59,8 @@ EXPLORE_STEPS = 4         # stops when the user does not say
 EXPLORE_MAX_STOPS = 8
 EXPLORE_STEP_M = 0.5      # how far it drives on between stops
 EXPLORE_FREE_M = 1.0      # ... when the sensor sees at least this much free (step + stop + margin)
-EXPLORE_TURN_DEG = 90     # else it turns this far left
+EXPLORE_TURN_DEG = 90     # else it turns this far, towards the side with more free floor (left if unsure)
+DESCRIBE_LIMIT = 200      # characters of a description (they are one short sentence)
 # What ends exploring early: the car cannot or should not move on
 EXPLORE_ENDS = (ESTOP, NOT_MOVING.split(":")[0], TURN_STUCK.split(":")[0].strip(), NO_ECHO.split(":")[0],
                 CAMERA_DOWN, "picar_base did not answer")
@@ -139,14 +140,28 @@ pan_deg 0 and tilt_deg 0 look straight ahead.""")
         return text + task.status_note(), picture
 
     def describe_around(label=""):
-        """What the camera sees ahead, to the left and to the right: [(side, words)]."""
+        """What the camera sees ahead, to the left and to the right: [(side, words, picture)]."""
         seen = []
         for pan, side in DESCRIBE_PANS:
             client.point_camera(pan, 0)
-            answer = ask_about(client.take_picture(), DESCRIBE, f"{label}camera {side}", limit=160)
-            seen.append((side, answer or "nothing clear"))
+            picture = client.take_picture()
+            answer = ask_about(picture, DESCRIBE, f"{label}camera {side}", limit=DESCRIBE_LIMIT)
+            seen.append((side, answer or "nothing clear", picture))
         client.point_camera(0, 0)
         return seen
+
+    def freer_side(left, right, label):
+        """"left" or "right": the side whose picture has more free floor, asked in both orders;
+        "" if the two answers do not agree."""
+        def first_freer(a, b):
+            answer = ask_about({"images": a["images"] + b["images"], "audios": []}, FREER, label)
+            return {"first": True, "second": False}.get(answer.split()[0].strip(".,'\"") if answer else "")
+        left_first, right_first = first_freer(left, right), first_freer(right, left)
+        if left_first is True and right_first is False:
+            return "left"
+        if left_first is False and right_first is True:
+            return "right"
+        return ""
 
     @tool(response_format="content_and_artifact")
     def look_around(target: str):
@@ -157,7 +172,7 @@ pan_deg 0 and tilt_deg 0 look straight ahead.""")
         """
         target = target.strip().lower()
         if no_target(target):
-            seen = "; ".join(f"{side}: {words}" for side, words in describe_around())
+            seen = "; ".join(f"{side}: {words}" for side, words, _ in describe_around())
             text = ("No target was named, so the camera described what it sees: " + seen
                     + ". Do not drive: answer the user now, starting with DONE, with what you saw.")
             return text, client.take_picture()
@@ -167,42 +182,50 @@ pan_deg 0 and tilt_deg 0 look straight ahead.""")
         if target != task.searched:
             task.misses = 0
         task.searched = target
-        shots, seen = {}, []
-        for pan in look_around_pans(car.max_pan_deg):
-            client.point_camera(pan, 0)
-            shots[pan] = client.take_picture()
-            where = where_is(shots[pan], target, f"camera at pan {pan}")
-            if where:
-                seen.append((pan, where))
-                if where == "middle":
-                    break   # in the middle of a picture: good enough, stop looking
-        client.point_camera(0, 0)
+        shots, seen = search_here(target)
         looked = ", ".join(str(p) for p in shots)
-        task.just_seen = target if seen else ""
         task.misses = 0 if seen else task.misses + 1
         if not seen:
             # Without an end the AI turned and looked for minutes (real car, 2026-11-17): after
-            # a full circle (three looks, two turns of 120) open space, then give up
+            # a full circle (three looks, two turns of 120) explore, then give up
             text = f"Looked around for the {target} with the camera at pan {looked}: not seen."
             if task.misses < 3:
                 text += " It may be behind the car: turn 120 and call look_around again."
             elif task.misses == 3:
-                text += (f" You have now looked all the way around. Drive {metres(car.max_drive_m)} m"
-                         " straight into open space, then call look_around again.")
+                text += (f" You have now looked all the way around. Call explore with target \"{target}\":"
+                         " it drives around the room and looks for it at every stop.")
             else:
                 text += (f" It is not anywhere around the car: finish with DONE and tell the user you"
                          f" could not find the {target}.")
             return text + task.status_note(), shots[0]
         pan, where = min(seen, key=lambda s: s[1] in ("left", "right"))   # prefer the middle
+        return f"Looked around for the {target}: {found_text(pan, where)}" + task.status_note(), shots[pan]
+
+    def search_here(target, label=""):
+        """Look for the target with the camera at look_around's pans (the car does not move):
+        the pictures {pan: picture} and the sightings [(pan, where)]; stops at one in the middle."""
+        shots, seen = {}, []
+        for pan in look_around_pans(car.max_pan_deg):
+            client.point_camera(pan, 0)
+            shots[pan] = client.take_picture()
+            where = where_is(shots[pan], target, f"{label}camera at pan {pan}")
+            if where:
+                seen.append((pan, where))
+                if where == "middle":
+                    break   # in the middle of a picture: good enough, stop looking
+        client.point_camera(0, 0)
+        task.just_seen = target if seen else ""
+        return shots, seen
+
+    def found_text(pan, where):
+        """Where a sighting is, and what to do: turn to face it, then approach."""
         angle = pan + {"left": SIDE_OFFSET_DEG, "right": -SIDE_OFFSET_DEG}.get(where, 0)
-        text = f"Looked around for the {target}: seen with the camera at pan {pan}, {where} of the picture"
+        text = f"seen with the camera at pan {pan}, {where} of the picture"
         if abs(angle) < 10:
-            text += ", about straight ahead. Call approach to drive to it."
-        else:
-            side = "left" if angle > 0 else "right"
-            text += (f", about {abs(angle)} degrees to the {side} of the car. Call turn with"
-                     f" angle_deg {angle} to face it, then call approach.")
-        return text + task.status_note(), shots[pan]
+            return text + ", about straight ahead. Call approach to drive to it."
+        side = "left" if angle > 0 else "right"
+        return (text + f", about {abs(angle)} degrees to the {side} of the car. Call turn with angle_deg "
+                f"{angle} to face it, then call approach.")
 
     @tool(response_format="content_and_artifact", description=f"""Drive, then take a picture straight ahead.
 
@@ -259,18 +282,40 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
         return picture_with_notes(text)
 
     @tool(response_format="content_and_artifact")
-    def explore(stops: int = EXPLORE_STEPS):
+    def explore(stops: int = EXPLORE_STEPS, target: str = ""):
         """Drive around and see what is there. At each stop the camera looks ahead, to the left
         and to the right; between stops the car drives on about 0.5 m where the way ahead is free,
-        or turns 90 degrees left where it is not. You get what the camera saw at every stop.
+        or turns 90 degrees towards the freer side where it is not. You get what the camera saw at
+        every stop. With a target, it looks for that target at every stop instead, and stops as
+        soon as it sees it.
 
         stops: how many places to look from, 1 to 8 (4 if the user did not say).
+        target: what to look for, for example "red ball"; "" to just see what is there.
         """
         stops = int(clamp(stops, 1, EXPLORE_MAX_STOPS))
+        target = target.strip().lower()
+        if no_target(target):
+            target = ""
+        elif target in task.reached:
+            return (f"You already reached the {target}. Do not look for it again: look for the next"
+                    f" target.{task.status_note()}", client.take_picture())
         notes, ended = [], ""
         for n in range(1, stops + 1):
-            seen = describe_around(f"explore, stop {n}, ")
-            notes.append(f"Stop {n}: " + "; ".join(f"{side}: {words}" for side, words in seen) + ".")
+            if target:   # looking for the target here
+                task.searched = target
+                shots, found = search_here(target, f"explore, stop {n}, ")
+                if found:
+                    pan, where = min(found, key=lambda s: s[1] in ("left", "right"))
+                    task.misses = 0
+                    return (f"Explored for the {target}: at stop {n} it was {found_text(pan, where)}"
+                            + task.status_note(), shots[pan])
+                # the pictures furthest to each side, for choosing where to turn
+                seen = [("ahead", "", shots[0]), ("to the left", "", shots[max(shots)]),
+                        ("to the right", "", shots[min(shots)])]
+                notes.append(f"Stop {n}: not seen.")
+            else:
+                seen = describe_around(f"explore, stop {n}, ")
+                notes.append(f"Stop {n}: " + "; ".join(f"{side}: {words}" for side, words, _ in seen) + ".")
             if n == stops:
                 break
             ahead = client.range_ahead()
@@ -279,16 +324,28 @@ steering_deg: -{car.max_steering_deg:.0f} to {car.max_steering_deg:.0f}, positiv
                     text, _ = drive.func(EXPLORE_STEP_M)
                     notes.append(f"Then drove on {EXPLORE_STEP_M:g} m.")
                 else:
-                    text, _ = turn.func(EXPLORE_TURN_DEG)
-                    notes.append(f"The way ahead was not free, so it turned {EXPLORE_TURN_DEG} degrees left.")
+                    pictures_now = {side: picture for side, _, picture in seen}
+                    side = freer_side(pictures_now["to the left"], pictures_now["to the right"],
+                                      f"explore, stop {n}, which side is freer")
+                    text, _ = turn.func(EXPLORE_TURN_DEG if side != "right" else -EXPLORE_TURN_DEG)
+                    why = f"the {side} side looked freer" if side else "it was not clear which side was freer"
+                    notes.append(f"The way ahead was not free and {why}, so it turned {EXPLORE_TURN_DEG} degrees "
+                                 f"{side or 'left'}.")
             except CameraDown as error:
                 text = str(error)
             if any(end in text for end in EXPLORE_ENDS):
                 ended = f" It stopped exploring early: {text}"
                 break
-        text = (f"Explored from {sum(note.startswith('Stop') for note in notes)} stops. What the camera saw: "
-                + " ".join(notes) + ended + " Now answer the user, starting with DONE, with a short summary "
-                "of what you saw (the main things and where, not every detail).")
+        stopped_at = sum(note.startswith("Stop") for note in notes)
+        if target:
+            task.misses = max(task.misses + 1, 4)   # searched around the room: look_around now says finish
+            text = (f"Explored from {stopped_at} stops looking for the {target}: not seen. " + " ".join(notes)
+                    + ended + f" Finish with DONE and tell the user you could not find the {target}.")
+            return text + task.status_note(), client.take_picture()
+        text = (f"Explored from {stopped_at} stops. What the camera saw: " + " ".join(notes) + ended
+                + " Now answer the user, starting with DONE, with a short summary of what you saw (the main"
+                " things and where, not every detail). Then save the two or three most useful findings"
+                " with remember, for example 'the blue box is next to the radiator'.")
         return text + task.status_note(), client.take_picture()
 
     @tool(response_format="content_and_artifact")

@@ -180,7 +180,8 @@ SAME_START = picar_tools.SAME.split("{target}")[0]
 assert picar_tools.CLOSE_UP.startswith(SAME_START)   # both compare with the first sighting
 # The questions answered from FakeVision.answers, in order
 ANSWERED_IN_ORDER = tuple(text.split("{")[0] for text in (
-    questions.WHERE, questions.OTHER, questions.IN_FRONT, questions.IN_FRONT_FIRST, questions.DESCRIBE))
+    questions.WHERE, questions.OTHER, questions.IN_FRONT, questions.IN_FRONT_FIRST, questions.DESCRIBE,
+    questions.FREER))
 WORD_ROWS = {"bottom edge": 0.99, "lower third": 0.83, "middle": 0.55, "upper half": 0.4}
 
 
@@ -870,7 +871,7 @@ def test_look_around_without_a_real_target_describes_and_does_not_drive(tools, c
     text = use(tools.look_around, target=target).content
     assert car.looks == [(0.0, 0.0), (45.0, 0.0), (-45.0, 0.0), (0.0, 0.0)]
     assert car.moves == []
-    assert vision.questions[0].startswith("This picture is from a small robot car's camera. Describe it")
+    assert vision.questions[0] == picar_tools.DESCRIBE and "Do not mention the camera" in vision.questions[0]
     assert ("ahead: a red stick on a blanket; to the left: a wooden wall; to the right: a plastic bag"
             in text)
     assert text.endswith("Do not drive: answer the user now, starting with DONE, with what you saw.")
@@ -949,7 +950,8 @@ def test_a_search_ends_after_a_full_circle_and_open_space(tools, car, vision):
     # the AI turned and looked for minutes for a "white bed" it never found (real car, 2026-11-17)
     texts = [use(tools.look_around, target="red box").content for _ in range(4)]
     assert "turn 120 and call look_around again" in texts[0] and "turn 120" in texts[1]
-    assert "looked all the way around. Drive 0.6 m straight into open space" in texts[2]
+    # then explore looks for it while driving around (before 2026-11-25: one blind drive into open space)
+    assert 'looked all the way around. Call explore with target "red box"' in texts[2]
     assert "finish with DONE and tell the user you could not find the red box" in texts[3]
 
 
@@ -1087,11 +1089,30 @@ def test_explore_looks_around_at_every_stop_and_drives_on_where_free(tools, car,
     assert sum(q == picar_tools.DESCRIBE for q in vision.questions) == 6
 
 
-def test_explore_turns_left_where_the_way_is_not_free(tools, car, vision):
+def test_explore_turns_left_where_the_way_is_not_free_and_neither_side_is_clearly_freer(tools, car, vision):
     car.range_m = 0.6                                        # less than 1 m free: no drive on
-    text = use(tools.explore, stops=2).content
+    text = use(tools.explore, stops=2).content               # "no" to "which side is freer?"
     assert car.moves == [move(1.0, 30.0, 90 / 200 / 0.2)]     # a 90 degree turn left
-    assert "The way ahead was not free, so it turned 90 degrees left." in text
+    assert "it was not clear which side was freer, so it turned 90 degrees left." in text
+
+
+def test_explore_turns_towards_the_side_with_more_free_floor(tools, car, vision):
+    # "is the floor free?" got 5 of 10 right on the real car's pictures, comparing the two sides 9 of
+    # 10 (2026-11-25): asked in both orders, the answers must agree
+    car.range_m = 0.6
+    vision.answers = ["a bed", "a chair close", "open floor", "second", "first"]   # the right side, both orders
+    text = use(tools.explore, stops=2).content
+    assert car.moves == [move(1.0, -30.0, 90 / 200 / 0.2)]    # a 90 degree turn right
+    assert "the right side looked freer, so it turned 90 degrees right." in text
+    asked = [i for i, q in enumerate(vision.questions) if q == picar_tools.FREER]
+    assert len(asked) == 2 and all(vision.pictures[i] == 2 for i in asked)
+
+
+def test_explore_turns_left_when_the_two_orders_disagree(tools, car, vision):
+    car.range_m = 0.6
+    vision.answers = ["a bed", "a chair close", "open floor", "second", "second"]   # always "the second"
+    assert "it was not clear which side was freer" in use(tools.explore, stops=2).content
+    assert car.moves[0]["steering_deg"] == 30.0
 
 
 def test_explore_stops_early_at_the_emergency_stop(tools, car, vision):
@@ -1100,6 +1121,34 @@ def test_explore_stops_early_at_the_emergency_stop(tools, car, vision):
     text = use(tools.explore, stops=4).content
     assert len(car.moves) == 1 and "Stop 2" not in text
     assert "It stopped exploring early" in text and "The emergency stop is on" in text
+
+
+def test_explore_with_a_target_stops_where_it_sees_it(tools, car, vision):
+    # "find the red box somewhere in the room"
+    car.range_m = 2.0
+    vision.answers = ["no", "no", "no", "no", "no", "middle"]   # stop 1: five pans; stop 2: ahead
+    text = use(tools.explore, stops=4, target="Red box").content
+    assert len(car.moves) == 1                                # drove on once, then saw it
+    assert text.startswith("Explored for the red box: at stop 2 it was seen with the camera at pan 0, "
+                           "middle of the picture, about straight ahead. Call approach")
+    assert not any(q == picar_tools.DESCRIBE for q in vision.questions)   # looks for it, not around
+
+
+def test_explore_with_a_target_it_does_not_see_says_finish(tools, car, vision):
+    car.range_m = 2.0
+    text = use(tools.explore, stops=2, target="red box").content
+    assert "Explored from 2 stops looking for the red box: not seen. Stop 1: not seen. Then drove on" in text
+    assert "Finish with DONE and tell the user you could not find the red box." in text
+    assert "could not find the red box" in use(tools.look_around, target="red box").content   # no more searching
+
+
+def test_explore_with_a_target_turns_by_its_side_pictures(car, vision):
+    # the real car's head turns 40 degrees: its side pictures are at 40 and -40, not 45
+    tools = make_tools(car, vision, dataclasses.replace(TWIN, max_pan_deg=40.0))
+    car.range_m = 0.6
+    vision.answers = ["no", "no", "no", "second", "first"]   # not seen; then the right side is freer
+    use(tools.explore, stops=2, target="red box")
+    assert car.moves[0]["steering_deg"] == -30.0
 
 
 def test_explore_looks_from_at_most_8_stops(tools, car, vision):

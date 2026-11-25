@@ -60,8 +60,17 @@ IN_FRONT_FIRST = ("These pictures are from a small robot car's camera. The first
 NO_TARGET = {"", "unknown", "anything", "something", "everything", "nothing", "object", "objects",
              "thing", "things", "surroundings", "around", "room", "area", "environment", "scene",
              "view", "what i see", "what you see"}
-DESCRIBE = ("This picture is from a small robot car's camera. Describe it in one short sentence: "
-            "the main things you see and their colours.")
+# Without "do not mention the camera" most answers started "from a low-angle robot car camera ..."
+# and the length limit cut off the things (real car, 2026-11-25); near/far helps the summary.
+DESCRIBE = ("This picture is from a small robot car's camera, close to the floor. Name the main things in it "
+            "with their colours, and for each whether it is near or far, in one short sentence. Do not "
+            "mention the camera, the picture or the car.")
+# Which way has more free floor? Asked about the pictures to the left and to the right, in both
+# orders: the real model on the explore run's pictures was right 9 of 10 times, while "is the
+# floor free?" got 5 of 10 (it said yes to a slipper and a wall right in front) (2026-11-25).
+FREER = ("Both pictures are from a small robot car's camera, close to the floor. In which picture is there "
+         "more empty floor in front of the camera, with nothing standing on it, so the car could drive "
+         "further that way? Answer only 'first' or 'second'.")
 
 COLOUR_WORDS = {"red", "blue", "green", "yellow", "white", "black", "orange", "purple", "pink",
                 "brown", "grey", "gray"}
